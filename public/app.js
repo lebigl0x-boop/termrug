@@ -70,8 +70,13 @@ function render() {
 
 function renderStreamStatus() {
   const pill = $('#stream-status'); const stream = state.streamStatus || {};
-  pill.className = `pill ${stream.connected ? 'live' : stream.configured ? '' : 'bad'}`;
+  // Standby is deliberate, not a failure: the pump.fun subscription is only open
+  // while a funded wallet is inside its watch window.
+  pill.className = `pill ${stream.connected ? 'live' : stream.idle ? 'idle' : stream.configured ? '' : 'bad'}`;
   pill.querySelector('span').textContent = (stream.label || 'Offline').toUpperCase();
+  pill.title = stream.idle
+    ? 'Standby — the pump.fun stream opens only while a wallet is under watch, to avoid burning Helius credits.'
+    : 'pump.fun Parsed Stream';
 }
 
 function renderWebhookStatus() {
@@ -88,8 +93,8 @@ function renderDock() {
   const stream = state.streamStatus || {};
   const hook = state.webhookStatus || {};
   const hookOk = hook.state && hook.state !== 'skipped' && hook.state !== 'error' && hook.state !== 'pending';
-  $('#dock-stream').className = `dock-item ${stream.connected ? 'is-on' : 'is-off'}`;
-  $('#dock-stream').lastChild.textContent = `Stream ${stream.connected ? 'live' : 'down'}`;
+  $('#dock-stream').className = `dock-item ${stream.connected ? 'is-on' : stream.idle ? 'is-idle' : 'is-off'}`;
+  $('#dock-stream').lastChild.textContent = `Stream ${stream.connected ? 'live' : stream.idle ? 'standby' : 'down'}`;
   $('#dock-webhook').className = `dock-item ${hookOk ? 'is-on' : 'is-off'}`;
   $('#dock-webhook').lastChild.textContent = `Webhook ${hookOk ? 'registered' : 'inactive'}`;
   $('#dock-configs').textContent = state.configs.length;

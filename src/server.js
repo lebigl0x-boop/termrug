@@ -25,7 +25,7 @@ const port = Number(process.env.PORT || 3000);
 const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
 const publicUrl = (process.env.PUBLIC_URL || (railwayDomain ? `https://${railwayDomain}` : `http://localhost:${port}`)).replace(/\/$/, '');
 const store = new ConfigStore();
-const streamStatus = { connected: false, configured: Boolean(process.env.HELIUS_API_KEY), label: 'Starting' };
+const streamStatus = { connected: false, configured: Boolean(process.env.HELIUS_API_KEY), label: 'Standby', idle: true };
 const webhookStatus = { state: 'pending', reason: '', addresses: 0, url: '' };
 let statsCache = {};
 
@@ -107,6 +107,7 @@ async function processFundingTransaction(transaction) {
         expiresAt: new Date(now + config.timeWindowMinutes * 60_000).toISOString()
       });
       if (!created) continue;
+      syncStream('funding match');
       await event('FUNDING_MATCH', {
         configId: config.id,
         configName: config.name,
@@ -228,6 +229,29 @@ async function processParsedTransaction(transaction) {
   }
 }
 
+/**
+ * The pump.fun subscription is program-wide: every create and buy on the whole
+ * program is billed, and all of it is discarded unless a funded wallet is under
+ * watch. Since watch windows are rare and short, the subscription is opened only
+ * while at least one is open, which is where nearly all the credit spend went.
+ */
+function activeWatchCount(now = Date.now()) {
+  return store.state.watchedWallets.filter((watch) => !watch.alertSent && new Date(watch.expiresAt).getTime() > now).length;
+}
+
+function syncStream(reason) {
+  const needed = activeWatchCount() > 0;
+  if (needed === helius.running) return;
+  if (needed) {
+    console.log(`Parsed Stream opening (${reason}) — ${activeWatchCount()} wallet(s) under watch`);
+    helius.start();
+  } else {
+    console.log(`Parsed Stream closing (${reason}) — no wallet under watch`);
+    helius.stop('Standby');
+  }
+  broadcast();
+}
+
 // Per-rule counters come from storage, which may hold more history than the
 // in-memory window. Cached because snapshot() is synchronous and hot.
 async function refreshStats() {
@@ -329,9 +353,9 @@ const helius = new HeliusParsedStream({
   onError: (error) => event('STREAM_ERROR', { message: `Parsed Stream: ${error.message}`, severity: 'error' }).catch(console.error)
 });
 
-setInterval(() => store.cleanup().then(() => broadcast()).catch(console.error), 30_000).unref();
+setInterval(() => store.cleanup().then(() => { syncStream('cleanup'); broadcast(); }).catch(console.error), 30_000).unref();
 setInterval(() => refreshStats().then(() => broadcast()).catch(console.error), 15_000).unref();
-helius.start();
+syncStream('startup');
 
 server.listen(port, () => {
   console.log(`Solana Exchange Scanner listening on ${publicUrl}`);

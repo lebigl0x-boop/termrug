@@ -301,3 +301,5 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .ov-enter { font-size: 11.5px; font-weight: 600; color: var(--blue); }
 
 @media (max-width: 1080px) { .totals { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.pill.idle { color: var(--amber); border-color: rgba(242,181,68,.28); background: rgba(242,181,68,.08); }
+.dock-item.is-idle i { background: var(--amber); }

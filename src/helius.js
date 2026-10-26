@@ -12,8 +12,14 @@ export class HeliusParsedStream {
     this.onError = onError;
     this.socket = null;
     this.retry = null;
-    this.stopped = false;
+    this.stopped = true;
     this.retryDelay = 1000;
+  }
+
+  // True between start() and stop(), regardless of socket state, so callers can
+  // decide whether the subscription needs opening or closing.
+  get running() {
+    return !this.stopped;
   }
 
   start() {
@@ -72,10 +78,11 @@ export class HeliusParsedStream {
     this.retryDelay = Math.min(this.retryDelay * 2, 30_000);
   }
 
-  stop() {
+  stop(label = 'Offline') {
     this.stopped = true;
     clearTimeout(this.retry);
     this.socket?.close();
+    this.onStatus?.({ connected: false, configured: Boolean(this.apiKey), label, idle: label === 'Standby' });
   }
 }
 

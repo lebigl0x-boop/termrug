@@ -118,6 +118,28 @@ container platform instead.
 On boot the service registers its Helius webhook against the stable Railway
 domain, so no tunnel and no dashboard configuration are needed.
 
+## Credit usage
+
+The pump.fun subscription is program-wide — `create`, `create_v2`, `buy` and
+`buy_v2` for every wallet on the program — and it is the dominant cost of
+running FlowWatch. Almost all of it is discarded: a create or buy only matters
+when its signer is a wallet that a funding transfer just put under watch.
+
+The subscription is therefore opened only while at least one watch window is
+open, and closed again when the last one expires:
+
+- A matching funding transfer opens it immediately.
+- The 30-second cleanup pass closes it once no watch remains.
+- Startup opens it only if watches were restored from storage.
+
+With rules that match a handful of transfers a day, the stream runs for a few
+hours instead of twenty-four. The UI reports the closed state as **Standby** in
+amber — a deliberate idle state, not a failure.
+
+The trade-off: when a funding transfer arrives, the subscription needs about a
+second to connect. A wallet that creates its token within that window would be
+missed. In practice a launch follows its funding by far more than a second.
+
 ## Detection details
 
 - A matching funding transfer creates a separate, expiring watched-wallet record for its rule.
