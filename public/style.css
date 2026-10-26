@@ -23,6 +23,9 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+/* An author `display` rule beats the UA `[hidden]` rule, which silently keeps
+   elements such as the webhook banner visible. This makes `hidden` authoritative. */
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); min-height: 100vh; padding-bottom: var(--dock-h); letter-spacing: -0.01em; -webkit-font-smoothing: antialiased; }
 button, input { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: none; }
@@ -100,7 +103,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 /* ---------- empty state ---------- */
 .void { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; min-height: 58vh; }
-.void[hidden] { display: none; }
 .void-mark { width: 46px; height: 46px; border-radius: 13px; border: 1px solid var(--line); background: var(--panel); color: var(--green); font-size: 19px; display: flex; align-items: center; justify-content: center; }
 .void h1 { font-size: 24px; letter-spacing: -0.02em; }
 .void p { color: var(--muted); font-size: 13.5px; max-width: 420px; line-height: 1.6; }
@@ -207,7 +209,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wallet-dot { width: 20px; height: 20px; border-radius: 50%; flex: none; background: linear-gradient(140deg, var(--indigo), var(--blue)); opacity: .85; }
 
 .void-row { padding: 36px 16px; text-align: center; color: var(--faint); font-size: 12.5px; }
-.void-row[hidden] { display: none; }
 
 /* ---------- dock ---------- */
 .dock { position: fixed; left: 0; right: 0; bottom: 0; height: var(--dock-h); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-top: 1px solid var(--line); background: var(--panel); z-index: 50; }
