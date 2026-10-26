@@ -276,9 +276,9 @@ app.post('/api/configs', async (request, response, next) => {
   try {
     const config = await store.createConfig(request.body);
     await event('CONFIG_CREATED', { configId: config.id, configName: config.name, message: `Config “${config.name}” created`, severity: 'info' });
-    response.status(201).json(config);
     await refreshStats();
     await syncWebhook('config created');
+    response.status(201).json(config);
   } catch (error) { next(error); }
 });
 
@@ -287,9 +287,9 @@ app.put('/api/configs/:id', async (request, response, next) => {
     const config = await store.updateConfig(request.params.id, request.body);
     if (!config) return response.status(404).json({ error: 'Config not found.' });
     await event('CONFIG_UPDATED', { configId: config.id, configName: config.name, message: `Config “${config.name}” updated`, severity: 'info' });
-    response.json(config);
     await refreshStats();
     await syncWebhook('config updated');
+    response.json(config);
   } catch (error) { next(error); }
 });
 
@@ -298,9 +298,9 @@ app.delete('/api/configs/:id', async (request, response, next) => {
     const config = store.getConfig(request.params.id);
     if (!await store.deleteConfig(request.params.id)) return response.status(404).json({ error: 'Config not found.' });
     await event('CONFIG_DELETED', { configId: request.params.id, configName: config?.name || 'Deleted config', message: `Config “${config?.name || ''}” deleted`, severity: 'info' });
-    response.status(204).end();
     await refreshStats();
     await syncWebhook('config deleted');
+    response.status(204).end();
   } catch (error) { next(error); }
 });
 

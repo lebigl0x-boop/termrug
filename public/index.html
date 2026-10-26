@@ -16,7 +16,7 @@
         <button type="button" class="topnav-item" data-tab="alerts">Alerts</button>
       </nav>
       <div class="topbar-center">
-        <button type="button" class="chip" id="copy-webhook"><span class="chip-icon">⧉</span>Copy webhook</button>
+        <button type="button" class="chip" id="copy-webhook" title="—"><span class="chip-icon">⧉</span>Copy webhook</button>
       </div>
       <div class="topbar-right">
         <span class="pill" id="stream-status"><i></i><span>Connecting</span></span>
@@ -45,24 +45,6 @@
     </div>
 
     <div class="layout">
-      <aside class="rail">
-        <div class="rail-head">
-          <span class="kicker">Scanners</span>
-          <em id="config-count">0</em>
-        </div>
-        <div class="rail-list" id="config-list"></div>
-        <div class="rail-empty" id="configs-empty">
-          <span class="orb">◎</span>
-          <strong>No scanner yet</strong>
-          <p>Create a rule to watch an exchange-to-launch flow.</p>
-          <button type="button" class="btn btn-primary" id="new-config-empty">Create scanner</button>
-        </div>
-        <div class="rail-foot">
-          <span class="kicker">Helius webhook</span>
-          <code id="webhook-url">—</code>
-          <button type="button" class="link-btn" id="copy-webhook-side">Copy endpoint</button>
-        </div>
-      </aside>
 
       <main class="main">
         <section class="void" id="dashboard-empty">

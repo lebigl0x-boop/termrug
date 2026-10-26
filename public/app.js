@@ -14,7 +14,7 @@ const rangeWindows = { '1h': 3_600_000, '24h': 86_400_000, '7d': 604_800_000, al
 const rangeNotes = { '1h': 'Last hour', '24h': 'Last 24 hours', '7d': 'Last 7 days', all: 'All time' };
 
 const els = {
-  configList: $('#config-list'), configsEmpty: $('#configs-empty'), dashboardEmpty: $('#dashboard-empty'), dashboard: $('#dashboard-content'),
+  dashboardEmpty: $('#dashboard-empty'), dashboard: $('#dashboard-content'),
   eventRows: $('#event-rows'), eventsEmpty: $('#events-empty'), watched: $('#watched-wallets'), walletsEmpty: $('#wallets-empty'),
   alerts: $('#alert-list'), alertsEmpty: $('#alerts-empty'), modal: $('#config-modal'), form: $('#config-form'), formError: $('#form-error'),
   walletFields: $('#wallet-fields'), fundingFields: $('#funding-fields'), devBuyFields: $('#devbuy-fields'),
@@ -56,13 +56,11 @@ function render() {
   const config = selectedConfig();
   const hasConfigs = state.configs.length > 0;
   const onDetail = view === 'detail' && Boolean(config);
-  $('#config-count').textContent = state.configs.length;
-  $('#webhook-url').textContent = state.webhookUrl || 'Set PUBLIC_URL first';
+  $('#copy-webhook').title = state.webhookUrl || 'Set PUBLIC_URL first';
   $('#crumb-name').textContent = onDetail ? config.name : 'All scanners';
   $('#range-note').textContent = rangeNotes[activeRange];
   $('#ov-range').textContent = rangeNotes[activeRange];
-  renderStreamStatus(); renderWebhookStatus(); renderRail(); renderDock();
-  els.configsEmpty.hidden = hasConfigs;
+  renderStreamStatus(); renderWebhookStatus(); renderDock();
   els.dashboardEmpty.hidden = hasConfigs;
   els.overview.hidden = !hasConfigs || onDetail;
   els.dashboard.hidden = !onDetail;
@@ -84,19 +82,6 @@ function renderWebhookStatus() {
   const count = hook.addresses ? ` · ${hook.addresses}` : '';
   els.webhookState.textContent = `${webhookLabels[hook.state] || 'Unknown'}${broken ? '' : count}`;
   els.webhookState.className = `pill ${broken ? 'bad' : hook.state === 'pending' ? '' : 'good'}`;
-}
-
-function renderRail() {
-  els.configList.replaceChildren();
-  for (const config of state.configs) {
-    const item = create('button', `rail-item ${config.id === selectedConfigId ? 'is-selected' : ''} ${config.enabled ? 'is-on' : ''}`);
-    item.type = 'button';
-    const copy = create('div');
-    copy.append(create('div', 'rail-name', config.name), create('div', 'rail-meta', `${config.watchAddresses.length} source${config.watchAddresses.length === 1 ? '' : 's'} · ${config.timeWindowMinutes}m`));
-    item.append(create('i'), copy, create('span', 'rail-badge', `${state.alerts.filter((alert) => alert.configId === config.id).length}`));
-    item.addEventListener('click', () => { selectedConfigId = config.id; view = 'detail'; render(); });
-    els.configList.append(item);
-  }
 }
 
 function renderDock() {
@@ -354,7 +339,7 @@ async function request(url, options = {}) {
 async function refresh() { const response = await fetch('/api/bootstrap'); applySnapshot(await response.json()); }
 async function saveConfig(payload, id = null) { await request(id ? `/api/configs/${id}` : '/api/configs', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); await refresh(); }
 
-['#new-config', '#new-config-empty', '#new-config-main', '#new-config-overview'].forEach((selector) => $(selector).addEventListener('click', () => openModal()));
+['#new-config', '#new-config-main', '#new-config-overview'].forEach((selector) => $(selector).addEventListener('click', () => openModal()));
 $('#edit-selected').addEventListener('click', () => openModal(selectedConfig()));
 $('#selected-toggle').addEventListener('change', async (event) => { const config = selectedConfig(); if (!config) return; try { await saveConfig({ ...config, enabled: event.target.checked }, config.id); } catch (error) { alert(error.message); render(); } });
 $('#delete-selected').addEventListener('click', async () => {
@@ -379,7 +364,6 @@ document.querySelectorAll('#range-picker button').forEach((button) => button.add
 
 async function copyWebhook() { try { await navigator.clipboard.writeText(state.webhookUrl); } catch { alert('Clipboard access was blocked.'); } }
 $('#copy-webhook').addEventListener('click', copyWebhook);
-$('#copy-webhook-side').addEventListener('click', copyWebhook);
 
 function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
