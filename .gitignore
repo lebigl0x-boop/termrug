@@ -1,0 +1,6 @@
+node_modules/
+.env
+
+# Runtime state — provided by the Railway volume in production.
+data/*.json
+data/*.tmp
