@@ -140,6 +140,26 @@ The trade-off: when a funding transfer arrives, the subscription needs about a
 second to connect. A wallet that creates its token within that window would be
 missed. In practice a launch follows its funding by far more than a second.
 
+## Parsed Stream payload
+
+A `parsedTransactionNotification` nests the transaction two levels down:
+
+```
+params.result.value = {
+  transaction:  { signature, slot, blockTime, feePayer, accountKeys, nativeTransfers, … },
+  instructions: [ { programId, programName, instructionName, decoded: { args, accounts } } ],
+  matchedIndexes: [ … ]
+}
+```
+
+Two details matter and are easy to get wrong:
+
+- `instructions` hangs off `value`, not off `value.transaction`, and each decoded
+  account is `{ name, pubkey, isSigner, isWritable }` under `decoded.accounts`.
+- On `create_v2` the instruction signer is the mint keypair, not the launcher.
+  The funded wallet is `decoded.args.creator`, which is why the create handler
+  prefers it over the `user` account.
+
 ## Detection details
 
 - A matching funding transfer creates a separate, expiring watched-wallet record for its rule.

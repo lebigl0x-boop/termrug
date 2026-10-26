@@ -135,7 +135,10 @@ async function processParsedTransaction(transaction) {
     const args = instructionArgs(instruction);
 
     if (name === 'create' || name === 'create_v2') {
-      const creator = accountValue(accounts, ['user', 'creator', 'payer', 'authority']);
+      // create_v2 names the funded wallet in its args; the `user` account is the
+      // same wallet but the mint keypair is the instruction signer.
+      const creator = (typeof args.creator === 'string' && args.creator)
+        || accountValue(accounts, ['user', 'creator', 'payer', 'authority']);
       const mint = accountValue(accounts, ['mint', 'base_mint', 'token_mint']);
       if (!creator || !mint) continue;
       for (const config of store.configs.filter((item) => item.enabled)) {

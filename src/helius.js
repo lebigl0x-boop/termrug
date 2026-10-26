@@ -57,8 +57,11 @@ export class HeliusParsedStream {
       try {
         const parsed = JSON.parse(payload.toString());
         if (parsed.error) throw new Error(parsed.error.message || 'Helius subscription error');
-        const transaction = parsed?.params?.result ?? parsed?.result;
-        if (transaction && !parsed?.result?.subscription) this.onTransaction?.(transaction);
+        // The subscription ack carries a numeric `result`; only notifications
+        // carry a transaction, nested as params.result.value.
+        if (parsed.method !== 'parsedTransactionNotification') return;
+        const value = parsed?.params?.result?.value ?? parsed?.params?.result;
+        if (value && typeof value === 'object') this.onTransaction?.(value);
       } catch (error) {
         this.onError?.(error);
       }
@@ -96,7 +99,7 @@ export function extractInstructions(transaction) {
 }
 
 export function accountsToObject(instruction = {}) {
-  const source = instruction.accounts ?? instruction.parsed?.accounts ?? [];
+  const source = instruction.decoded?.accounts ?? instruction.accounts ?? instruction.parsed?.accounts ?? [];
   if (Array.isArray(source)) {
     return Object.fromEntries(source
       .filter((account) => account?.name && (account.pubkey || account.address))
@@ -114,7 +117,7 @@ export function transactionSignature(transaction = {}) {
 }
 
 export function transactionTimestamp(transaction = {}) {
-  const value = transaction.timestamp ?? transaction.blockTime ?? transaction.transaction?.timestamp;
+  const value = transaction.timestamp ?? transaction.blockTime ?? transaction.transaction?.blockTime ?? transaction.transaction?.timestamp;
   if (!value) return new Date().toISOString();
   const milliseconds = Number(value) < 10_000_000_000 ? Number(value) * 1000 : Number(value);
   return new Date(milliseconds).toISOString();
