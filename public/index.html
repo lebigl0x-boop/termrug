@@ -3,105 +3,247 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0c0d10" />
+    <meta name="theme-color" content="#08090b" />
     <title>FlowWatch — Solana Scanner</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header class="app-header">
-      <a class="brand" href="/"><span class="brand-icon">◈</span><span>FLOW<span>WATCH</span></span></a>
-      <nav class="main-nav" aria-label="Primary"><a class="active" href="#">Scanner</a><a href="#wallets">Wallets</a><a href="#alerts">Alerts</a></nav>
-      <div class="header-spacer"></div>
-      <div class="stream-state" id="stream-status"><i></i><span>Connecting</span></div>
-      <button class="top-action" id="copy-webhook">Webhook</button>
-      <div class="top-stat"><small>ALERTS</small><strong id="alert-count">0</strong></div>
-      <div class="profile-dot">FW</div>
+    <header class="topbar">
+      <a class="brand" href="/"><span class="brand-mark">◈</span>FLOW<em>WATCH</em></a>
+      <nav class="topnav" aria-label="Primary">
+        <button type="button" class="topnav-item is-active" data-tab="feed">Scanner</button>
+        <button type="button" class="topnav-item" data-tab="wallets">Wallets</button>
+        <button type="button" class="topnav-item" data-tab="alerts">Alerts</button>
+      </nav>
+      <div class="topbar-center">
+        <button type="button" class="chip" id="copy-webhook"><span class="chip-icon">⧉</span>Copy webhook</button>
+      </div>
+      <div class="topbar-right">
+        <span class="pill" id="stream-status"><i></i><span>Connecting</span></span>
+        <span class="pill" id="webhook-state">Checking</span>
+        <button type="button" class="btn btn-primary" id="new-config">Create <span>+</span></button>
+        <span class="avatar">FW</span>
+      </div>
     </header>
 
-    <div class="sub-header">
-      <div class="breadcrumbs"><span>Scanner</span><b>/</b><strong id="crumb-name">Select a configuration</strong></div>
-      <div class="sub-header-right"><span class="utc"><b>UTC</b><strong id="utc-clock">--:--:--</strong></span><span class="network"><i></i>SOLANA MAINNET</span></div>
+    <div class="subbar">
+      <div class="crumbs"><span>Scanner</span><b>/</b><strong id="crumb-name">Select a configuration</strong></div>
+      <div class="subbar-right">
+        <div class="segmented" id="range-picker" role="group" aria-label="Time range">
+          <button type="button" data-range="1h">1h</button>
+          <button type="button" data-range="24h">24h</button>
+          <button type="button" data-range="7d">7d</button>
+          <button type="button" class="is-active" data-range="all">Max</button>
+        </div>
+        <span class="net"><i></i>SOLANA MAINNET</span>
+      </div>
     </div>
 
-    <div class="webhook-banner" id="webhook-banner" hidden>
+    <div class="banner" id="webhook-banner" hidden>
       <span class="banner-icon">⚠</span>
       <div><strong>Detection inactive — no funding event can be received.</strong><p id="webhook-banner-reason"></p></div>
     </div>
 
-    <div class="app-layout">
-      <aside class="sidebar">
-        <div class="sidebar-head"><div><span class="section-kicker">YOUR SCANNERS</span><h2>Configurations <em id="config-count">0</em></h2></div><button class="square-button primary" id="new-config" aria-label="Create configuration">+</button></div>
-        <div class="config-nav" id="config-list"></div>
-        <div class="sidebar-empty" id="configs-empty"><span class="empty-orb">◎</span><strong>No scanner yet</strong><p>Build a rule for a precise exchange-to-launch flow.</p><button class="button primary" id="new-config-empty">Create scanner</button></div>
-        <div class="sidebar-foot"><span class="section-kicker">HELIUS WEBHOOK</span><span class="webhook-state" id="webhook-state">Checking</span><code id="webhook-url">—</code><button class="copy-link" id="copy-webhook-side">Copy endpoint</button></div>
+    <div class="layout">
+      <aside class="rail">
+        <div class="rail-head">
+          <span class="kicker">Scanners</span>
+          <em id="config-count">0</em>
+        </div>
+        <div class="rail-list" id="config-list"></div>
+        <div class="rail-empty" id="configs-empty">
+          <span class="orb">◎</span>
+          <strong>No scanner yet</strong>
+          <p>Create a rule to watch an exchange-to-launch flow.</p>
+          <button type="button" class="btn btn-primary" id="new-config-empty">Create scanner</button>
+        </div>
+        <div class="rail-foot">
+          <span class="kicker">Helius webhook</span>
+          <code id="webhook-url">—</code>
+          <button type="button" class="link-btn" id="copy-webhook-side">Copy endpoint</button>
+        </div>
       </aside>
 
-      <main class="dashboard" id="dashboard">
-        <section class="dashboard-empty" id="dashboard-empty"><div class="empty-logo">◈</div><span class="section-kicker">EXCHANGE FLOW MONITOR</span><h1>Build your first scanner.</h1><p>Choose the exchange wallets, add one or more funding and dev-buy ranges, then monitor the full signal funnel in real time.</p><button class="button primary large" id="new-config-main">Create configuration</button></section>
+      <main class="main">
+        <section class="void" id="dashboard-empty">
+          <div class="void-mark">◈</div>
+          <span class="kicker">Exchange flow monitor</span>
+          <h1>Build your first scanner.</h1>
+          <p>Pick the exchange wallets, add funding and dev-buy ranges, then watch the signal funnel in real time.</p>
+          <button type="button" class="btn btn-primary btn-lg" id="new-config-main">Create configuration</button>
+        </section>
 
         <div id="dashboard-content" hidden>
-          <section class="dashboard-titlebar">
-            <div><div class="title-overline"><span class="active-dot"></span><span id="selected-status">ACTIVE</span><span>•</span><span id="selected-window">60 MIN WINDOW</span></div><h1 id="selected-name">—</h1><p id="selected-summary">—</p></div>
-            <div class="title-actions"><label class="switch"><input type="checkbox" id="selected-toggle" /><span></span></label><button class="button" id="edit-selected">Edit rule</button><button class="icon-button danger" id="delete-selected" aria-label="Delete configuration">⌫</button></div>
+          <section class="titlebar">
+            <div class="titlebar-copy">
+              <div class="overline"><span class="dot" id="selected-dot"></span><span id="selected-status">ACTIVE</span><b>·</b><span id="selected-window">60 MIN WINDOW</span></div>
+              <h1 id="selected-name">—</h1>
+            </div>
+            <div class="titlebar-actions">
+              <label class="switch" title="Enable or pause"><input type="checkbox" id="selected-toggle" /><span></span></label>
+              <button type="button" class="btn" id="edit-selected">Edit</button>
+              <button type="button" class="btn btn-danger" id="delete-selected">Delete</button>
+            </div>
           </section>
 
-          <section class="metric-strip">
-            <article class="metric"><span>WATCHED WALLETS</span><strong id="metric-watched">0</strong><small>inside active window</small></article>
-            <article class="metric"><span>FUNDING RANGES</span><strong id="metric-funding">0</strong><small id="metric-funding-value">—</small></article>
-            <article class="metric"><span>DEV BUY RANGES</span><strong id="metric-devbuy">0</strong><small id="metric-devbuy-value">—</small></article>
-            <article class="metric"><span>CONFIRMED SIGNALS</span><strong class="green" id="metric-alerts">0</strong><small>all time for this rule</small></article>
-          </section>
-
-          <section class="workspace-grid">
-            <section class="card flow-card">
-              <header class="card-header"><div><span class="section-kicker">LIVE FLOW</span><h2>Signal feed</h2></div><div class="live-label"><i></i>LIVE</div></header>
-              <div class="table-wrap"><table class="data-table"><thead><tr><th>TIME</th><th>EVENT</th><th>AMOUNT</th><th>WALLET / MINT</th><th>DETAIL</th><th></th></tr></thead><tbody id="event-rows"></tbody></table><div class="table-empty" id="events-empty">No events for this configuration yet.</div></div>
-            </section>
-            <section class="card pipeline-card">
-              <header class="card-header"><div><span class="section-kicker">SIGNAL FUNNEL</span><h2>Live pipeline</h2></div><span class="muted-label">Current rule</span></header>
-              <div class="pipeline">
-                <div class="pipe-step"><span class="pipe-index">01</span><div><strong>Exchange funding</strong><small id="pipe-funding-detail">0 configured ranges</small></div><b id="pipe-funding">0</b></div>
-                <div class="pipe-line"></div>
-                <div class="pipe-step"><span class="pipe-index">02</span><div><strong>Token creation</strong><small>from funded wallet</small></div><b id="pipe-launches">0</b></div>
-                <div class="pipe-line"></div>
-                <div class="pipe-step"><span class="pipe-index">03</span><div><strong>Dev buy match</strong><small id="pipe-devbuy-detail">0 configured ranges</small></div><b class="green" id="pipe-alerts">0</b></div>
+          <section class="cards">
+            <article class="card">
+              <header class="card-head"><h2>Observation</h2><span class="card-note" id="card-window">60 min</span></header>
+              <div class="stat">
+                <span class="stat-label">Watched wallets</span>
+                <strong class="stat-value" id="metric-watched">0</strong>
+                <small class="stat-foot">inside the active window</small>
               </div>
-              <div class="range-summary"><span>TRACKING</span><div id="selected-wallet-chips"></div></div>
-            </section>
+              <div class="divider"></div>
+              <div class="stat-row">
+                <div><span class="stat-label">Confirmed</span><strong class="stat-sub green" id="metric-alerts">0</strong></div>
+                <div><span class="stat-label">Sources</span><strong class="stat-sub" id="metric-sources">0</strong></div>
+              </div>
+              <div class="chips" id="selected-wallet-chips"></div>
+            </article>
+
+            <article class="card">
+              <header class="card-head"><h2>Signal funnel</h2><span class="live"><i></i>LIVE</span></header>
+              <div class="funnel" id="funnel"></div>
+              <div class="divider"></div>
+              <div class="bar-split" id="funnel-split"></div>
+              <div class="legend">
+                <span><i class="sw-blue"></i>Funding</span>
+                <span><i class="sw-amber"></i>Token create</span>
+                <span><i class="sw-green"></i>Dev buy</span>
+              </div>
+            </article>
+
+            <article class="card">
+              <header class="card-head"><h2>Thresholds</h2><span class="card-note">SOL</span></header>
+              <div class="thresholds">
+                <div class="threshold-group">
+                  <span class="stat-label">Funding ranges <em id="metric-funding">0</em></span>
+                  <div class="range-rows" id="funding-rows"></div>
+                </div>
+                <div class="threshold-group">
+                  <span class="stat-label">Dev buy ranges <em id="metric-devbuy">0</em></span>
+                  <div class="range-rows" id="devbuy-rows"></div>
+                </div>
+              </div>
+            </article>
           </section>
 
-          <section class="card wallets-card" id="wallets">
-            <header class="card-header"><div><span class="section-kicker">ACTIVE OBSERVATION</span><h2>Watched wallets <em id="watched-count">0</em></h2></div><span class="muted-label">Auto-cleared after expiry</span></header>
-            <div class="watch-table" id="watched-wallets"></div><div class="table-empty small" id="wallets-empty">No wallet has entered this scanner’s watch window.</div>
-          </section>
+          <section class="panel">
+            <div class="panel-tabs" role="tablist">
+              <button type="button" class="tab is-active" data-tab="feed" role="tab">Live feed <em id="tab-feed-count">0</em></button>
+              <button type="button" class="tab" data-tab="wallets" role="tab">Watched wallets <em id="tab-wallets-count">0</em></button>
+              <button type="button" class="tab" data-tab="alerts" role="tab">Alerts <em id="tab-alerts-count">0</em></button>
+              <span class="panel-tabs-spacer"></span>
+              <span class="card-note" id="range-note">All time</span>
+            </div>
 
-          <section class="card alerts-card" id="alerts">
-            <header class="card-header"><div><span class="section-kicker">CONFIRMED</span><h2>Signal alerts</h2></div><span class="muted-label">Telegram delivery status included</span></header>
-            <div class="alert-table" id="alert-list"></div><div class="table-empty small" id="alerts-empty">Confirmed dev-buy signals will appear here.</div>
+            <div class="panel-body" data-panel="feed">
+              <div class="table-scroll">
+                <table class="grid">
+                  <thead><tr><th>Time</th><th>Event</th><th class="num">Amount</th><th>Wallet / mint</th><th>Detail</th><th></th></tr></thead>
+                  <tbody id="event-rows"></tbody>
+                </table>
+              </div>
+              <div class="void-row" id="events-empty">No events for this scanner yet.</div>
+            </div>
+
+            <div class="panel-body" data-panel="wallets" hidden>
+              <div class="table-scroll">
+                <table class="grid">
+                  <thead><tr><th>Funded wallet</th><th class="num">Funding</th><th>Source</th><th class="num">Remaining</th><th></th></tr></thead>
+                  <tbody id="watched-wallets"></tbody>
+                </table>
+              </div>
+              <div class="void-row" id="wallets-empty">No wallet has entered this scanner’s watch window.</div>
+            </div>
+
+            <div class="panel-body" data-panel="alerts" hidden>
+              <div class="table-scroll">
+                <table class="grid">
+                  <thead><tr><th>Token</th><th class="num">Dev buy</th><th class="num">Funding</th><th class="num">Elapsed</th><th>Telegram</th><th></th></tr></thead>
+                  <tbody id="alert-list"></tbody>
+                </table>
+              </div>
+              <div class="void-row" id="alerts-empty">Confirmed dev-buy signals will appear here.</div>
+            </div>
           </section>
         </div>
       </main>
     </div>
 
-    <dialog id="config-modal" class="config-modal">
+    <footer class="dock">
+      <div class="dock-left">
+        <span class="dock-item" id="dock-stream"><i></i>Stream</span>
+        <span class="dock-item" id="dock-webhook"><i></i>Webhook</span>
+        <span class="dock-sep"></span>
+        <span class="dock-item muted">Scanners <b id="dock-configs">0</b></span>
+      </div>
+      <div class="dock-right">
+        <span class="dock-item muted">Watched <b id="dock-watched">0</b></span>
+        <span class="dock-item muted">Launches <b id="dock-launches">0</b></span>
+        <span class="dock-item green">Signals <b id="dock-alerts">0</b></span>
+        <span class="dock-sep"></span>
+        <span class="dock-item muted">UTC <b id="utc-clock">--:--:--</b></span>
+      </div>
+    </footer>
+
+    <dialog id="config-modal" class="modal">
       <form method="dialog" id="config-form">
-        <header class="modal-header"><div><span class="section-kicker">SCANNER RULE</span><h2 id="modal-title">New configuration</h2></div><button type="button" class="close-button" id="close-modal">×</button></header>
+        <header class="modal-head">
+          <div><span class="kicker">Scanner rule</span><h2 id="modal-title">New configuration</h2></div>
+          <button type="button" class="icon-btn" id="close-modal" aria-label="Close">×</button>
+        </header>
         <div class="modal-body">
           <input type="hidden" name="id" />
-          <label class="form-label">Scanner name<input name="name" required maxlength="60" placeholder="Binance 15 SOL launcher" /></label>
-          <section class="rule-section"><div class="rule-section-head"><div><strong>Source wallets</strong><small>Any outgoing SOL transfer from one of these addresses can enter the funnel.</small></div><button type="button" class="add-line" data-add="wallet">+ Add wallet</button></div><div id="wallet-fields" class="repeater"></div></section>
-          <div class="dual-rule-sections">
-            <section class="rule-section"><div class="rule-section-head"><div><strong>Funding ranges <span class="sol-label">SOL</span></strong><small>Wallet is watched when funding matches any range.</small></div><button type="button" class="add-line" data-add="funding">+ Add range</button></div><div id="funding-fields" class="repeater"></div></section>
-            <section class="rule-section"><div class="rule-section-head"><div><strong>Dev buy ranges <span class="sol-label">SOL</span></strong><small>Alert only when buy matches any range.</small></div><button type="button" class="add-line" data-add="devbuy">+ Add range</button></div><div id="devbuy-fields" class="repeater"></div></section>
+          <label class="field">Scanner name<input name="name" required maxlength="60" placeholder="Binance 15 SOL launcher" /></label>
+
+          <section class="rule-block">
+            <div class="rule-head">
+              <div><strong>Source wallets</strong><small>Any outgoing SOL transfer from these addresses can enter the funnel.</small></div>
+              <button type="button" class="link-btn" data-add="wallet">+ Add wallet</button>
+            </div>
+            <div id="wallet-fields" class="repeater"></div>
+          </section>
+
+          <div class="rule-duo">
+            <section class="rule-block">
+              <div class="rule-head">
+                <div><strong>Funding ranges</strong><small>Wallet is watched when funding matches any range.</small></div>
+                <button type="button" class="link-btn" data-add="funding">+ Add</button>
+              </div>
+              <div id="funding-fields" class="repeater"></div>
+            </section>
+            <section class="rule-block">
+              <div class="rule-head">
+                <div><strong>Dev buy ranges</strong><small>Alert only when the buy matches any range.</small></div>
+                <button type="button" class="link-btn" data-add="devbuy">+ Add</button>
+              </div>
+              <div id="devbuy-fields" class="repeater"></div>
+            </section>
           </div>
-          <div class="settings-row"><label class="form-label">Watch window<input name="timeWindowMinutes" type="number" min="1" step="1" required value="60" /><small>minutes after funding</small></label><label class="form-label">Telegram chat ID <small>Optional rule override</small><input name="telegramChatId" placeholder="-100…" /></label><label class="toggle-setting"><input name="enabled" type="checkbox" checked /><span></span><b>Scanner active</b></label></div>
+
+          <div class="settings-row">
+            <label class="field">Watch window<input name="timeWindowMinutes" type="number" min="1" step="1" required value="60" /><small>minutes after funding</small></label>
+            <label class="field">Telegram chat ID<input name="telegramChatId" placeholder="-100…" /><small>optional rule override</small></label>
+            <label class="toggle-field"><input name="enabled" type="checkbox" checked /><span></span><b>Scanner active</b></label>
+          </div>
           <p class="form-error" id="form-error" role="alert"></p>
         </div>
-        <footer class="modal-footer"><button class="button ghost" type="button" id="cancel-modal">Cancel</button><button class="button primary" type="submit">Save scanner</button></footer>
+        <footer class="modal-foot">
+          <button type="button" class="btn" id="cancel-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save scanner</button>
+        </footer>
       </form>
     </dialog>
-    <template id="wallet-row-template"><div class="repeat-row wallet-row"><span class="drag-handle">⠿</span><input data-wallet placeholder="Solana wallet address" required /><button type="button" class="remove-row" aria-label="Remove wallet">×</button></div></template>
-    <template id="range-row-template"><div class="repeat-row range-row"><input data-min type="number" min="0" step="0.0001" placeholder="Min" required /><span>to</span><input data-max type="number" min="0" step="0.0001" placeholder="Max" required /><span class="sol-label">SOL</span><button type="button" class="remove-row" aria-label="Remove range">×</button></div></template>
+
+    <template id="wallet-row-template">
+      <div class="repeat-row"><span class="handle">⠿</span><input data-wallet placeholder="Solana wallet address" required /><button type="button" class="remove-row" aria-label="Remove">×</button></div>
+    </template>
+    <template id="range-row-template">
+      <div class="repeat-row range-row"><input data-min type="number" min="0" step="0.0001" placeholder="Min" required /><span class="to">to</span><input data-max type="number" min="0" step="0.0001" placeholder="Max" required /><button type="button" class="remove-row" aria-label="Remove">×</button></div>
+    </template>
+
     <script type="module" src="/app.js"></script>
   </body>
 </html>
