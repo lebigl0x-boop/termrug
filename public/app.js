@@ -1,6 +1,7 @@
-const state = { configs: [], watchedWallets: [], alerts: [], events: [], streamStatus: {}, webhookStatus: {}, webhookUrl: '' };
+const state = { configs: [], watchedWallets: [], alerts: [], events: [], streamStatus: {}, webhookStatus: {}, stats: {}, webhookUrl: '' };
 let selectedConfigId = null;
 let activeTab = 'feed';
+let view = 'overview';
 let activeRange = 'all';
 
 const $ = (selector) => document.querySelector(selector);
@@ -18,7 +19,8 @@ const els = {
   alerts: $('#alert-list'), alertsEmpty: $('#alerts-empty'), modal: $('#config-modal'), form: $('#config-form'), formError: $('#form-error'),
   walletFields: $('#wallet-fields'), fundingFields: $('#funding-fields'), devBuyFields: $('#devbuy-fields'),
   webhookBanner: $('#webhook-banner'), webhookState: $('#webhook-state'), funnel: $('#funnel'), funnelSplit: $('#funnel-split'),
-  fundingRows: $('#funding-rows'), devBuyRows: $('#devbuy-rows')
+  fundingRows: $('#funding-rows'), devBuyRows: $('#devbuy-rows'),
+  overview: $('#overview'), overviewGrid: $('#overview-grid')
 };
 
 const rangeList = (config, key, legacyMin, legacyMax) => Array.isArray(config?.[key]) && config[key].length ? config[key] : [{ min: config?.[legacyMin], max: config?.[legacyMax] }];
@@ -26,6 +28,20 @@ const configRanges = (config, key) => key === 'fundingRanges' ? rangeList(config
 const selectedConfig = () => state.configs.find((config) => config.id === selectedConfigId) || null;
 const byConfig = (items) => items.filter((item) => item.configId === selectedConfigId);
 const inRange = (items) => { const span = rangeWindows[activeRange]; if (span === Infinity) return items; const floor = Date.now() - span; return items.filter((item) => new Date(item.at).getTime() >= floor); };
+const statsFor = (configId) => {
+  const events = inRange(state.events.filter((event) => event.configId === configId));
+  const live = {
+    watched: state.watchedWallets.filter((watch) => watch.configId === configId && new Date(watch.expiresAt).getTime() > Date.now()).length,
+    funding: events.filter((event) => event.type === 'FUNDING_MATCH').length,
+    launches: events.filter((event) => event.type === 'TOKEN_CREATE').length,
+    signals: inRange(state.alerts.filter((alert) => alert.configId === configId)).length,
+    lastAt: events[0]?.at ?? null
+  };
+  // Server counters cover the whole stored history; they only line up with the
+  // "Max" range, so narrower ranges keep counting the in-memory window.
+  const stored = activeRange === 'all' ? state.stats?.[configId] : null;
+  return stored ? { ...live, funding: stored.funding, launches: stored.launches, signals: stored.signals, lastAt: stored.lastAt ?? live.lastAt } : live;
+};
 const create = (tag, className, text) => { const item = document.createElement(tag); if (className) item.className = className; if (text !== undefined) item.textContent = text; return item; };
 const cell = (className, text) => create('td', className, text);
 const link = (className, text, href) => { const item = create('a', className, text); item.href = href; item.target = '_blank'; item.rel = 'noreferrer'; return item; };
@@ -38,15 +54,20 @@ function applySnapshot(data) {
 
 function render() {
   const config = selectedConfig();
+  const hasConfigs = state.configs.length > 0;
+  const onDetail = view === 'detail' && Boolean(config);
   $('#config-count').textContent = state.configs.length;
   $('#webhook-url').textContent = state.webhookUrl || 'Set PUBLIC_URL first';
-  $('#crumb-name').textContent = config?.name || 'Select a configuration';
+  $('#crumb-name').textContent = onDetail ? config.name : 'All scanners';
   $('#range-note').textContent = rangeNotes[activeRange];
+  $('#ov-range').textContent = rangeNotes[activeRange];
   renderStreamStatus(); renderWebhookStatus(); renderRail(); renderDock();
-  els.configsEmpty.hidden = state.configs.length > 0;
-  els.dashboardEmpty.hidden = Boolean(config);
-  els.dashboard.hidden = !config;
-  if (config) renderDashboard(config);
+  els.configsEmpty.hidden = hasConfigs;
+  els.dashboardEmpty.hidden = hasConfigs;
+  els.overview.hidden = !hasConfigs || onDetail;
+  els.dashboard.hidden = !onDetail;
+  if (onDetail) renderDashboard(config);
+  else if (hasConfigs) renderOverview();
 }
 
 function renderStreamStatus() {
@@ -73,7 +94,7 @@ function renderRail() {
     const copy = create('div');
     copy.append(create('div', 'rail-name', config.name), create('div', 'rail-meta', `${config.watchAddresses.length} source${config.watchAddresses.length === 1 ? '' : 's'} · ${config.timeWindowMinutes}m`));
     item.append(create('i'), copy, create('span', 'rail-badge', `${state.alerts.filter((alert) => alert.configId === config.id).length}`));
-    item.addEventListener('click', () => { selectedConfigId = config.id; render(); });
+    item.addEventListener('click', () => { selectedConfigId = config.id; view = 'detail'; render(); });
     els.configList.append(item);
   }
 }
@@ -90,6 +111,50 @@ function renderDock() {
   $('#dock-watched').textContent = state.watchedWallets.filter((watch) => new Date(watch.expiresAt).getTime() > Date.now()).length;
   $('#dock-launches').textContent = state.events.filter((event) => event.type === 'TOKEN_CREATE').length;
   $('#dock-alerts').textContent = state.alerts.length;
+}
+
+function renderOverview() {
+  const totals = state.configs.map((config) => statsFor(config.id));
+  $('#ov-configs').textContent = state.configs.length;
+  $('#ov-active').textContent = `${state.configs.filter((config) => config.enabled).length} active`.toUpperCase();
+  $('#ov-watched').textContent = totals.reduce((sum, item) => sum + item.watched, 0);
+  $('#ov-launches').textContent = totals.reduce((sum, item) => sum + item.launches, 0);
+  $('#ov-signals').textContent = totals.reduce((sum, item) => sum + item.signals, 0);
+
+  els.overviewGrid.replaceChildren();
+  state.configs.forEach((config) => {
+    const stats = statsFor(config.id);
+    const card = create('button', `ov-card ${config.enabled ? 'is-on' : ''}`);
+    card.type = 'button';
+
+    const head = create('div', 'ov-head');
+    const title = create('div', 'ov-title');
+    const copy = create('div');
+    copy.append(create('strong', null, config.name), create('div', 'ov-meta', `${config.watchAddresses.length} source${config.watchAddresses.length === 1 ? '' : 's'} · ${config.timeWindowMinutes} min window`));
+    title.append(create('i'), copy);
+    head.append(title, create('span', `pill ${config.enabled ? 'good' : ''}`, config.enabled ? 'Active' : 'Paused'));
+
+    const grid = create('div', 'ov-stats');
+    [['Watched', stats.watched, ''], ['Launches', stats.launches, ''], ['Signals', stats.signals, 'green']].forEach(([label, value, tone]) => {
+      const box = create('div');
+      box.append(create('span', 'stat-label', label), create('b', tone, String(value)));
+      grid.append(box);
+    });
+
+    const ranges = create('div', 'ov-ranges');
+    [['Funding', configRanges(config, 'fundingRanges')], ['Dev buy', configRanges(config, 'devBuyRanges')]].forEach(([label, list]) => {
+      const row = create('div', 'ov-range');
+      row.append(create('span', null, label), create('span', null, list.map((range) => `${Number(range.min).toFixed(2)}–${Number(range.max).toFixed(2)}`).join('  ·  ')));
+      ranges.append(row);
+    });
+
+    const foot = create('div', 'ov-foot');
+    foot.append(create('small', null, stats.lastAt ? `Last activity ${time(stats.lastAt)} UTC` : 'No activity yet'), create('span', 'ov-enter', 'Open →'));
+
+    card.append(head, grid, ranges, foot);
+    card.addEventListener('click', () => { selectedConfigId = config.id; view = 'detail'; render(); });
+    els.overviewGrid.append(card);
+  });
 }
 
 function renderDashboard(config) {
@@ -289,7 +354,7 @@ async function request(url, options = {}) {
 async function refresh() { const response = await fetch('/api/bootstrap'); applySnapshot(await response.json()); }
 async function saveConfig(payload, id = null) { await request(id ? `/api/configs/${id}` : '/api/configs', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); await refresh(); }
 
-['#new-config', '#new-config-empty', '#new-config-main'].forEach((selector) => $(selector).addEventListener('click', () => openModal()));
+['#new-config', '#new-config-empty', '#new-config-main', '#new-config-overview'].forEach((selector) => $(selector).addEventListener('click', () => openModal()));
 $('#edit-selected').addEventListener('click', () => openModal(selectedConfig()));
 $('#selected-toggle').addEventListener('change', async (event) => { const config = selectedConfig(); if (!config) return; try { await saveConfig({ ...config, enabled: event.target.checked }, config.id); } catch (error) { alert(error.message); render(); } });
 $('#delete-selected').addEventListener('click', async () => {
@@ -306,6 +371,7 @@ els.form.addEventListener('submit', async (event) => {
   const id = els.form.elements.id.value || null;
   try { await saveConfig(formPayload(), id); if (!id) selectedConfigId = state.configs[0]?.id || selectedConfigId; els.modal.close(); render(); } catch (error) { els.formError.textContent = error.message; }
 });
+$('#crumb-root').addEventListener('click', () => { view = 'overview'; render(); });
 $('#close-modal').addEventListener('click', () => els.modal.close());
 $('#cancel-modal').addEventListener('click', () => els.modal.close());
 document.querySelectorAll('.tab, .topnav-item').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.tab)));
@@ -327,7 +393,8 @@ function connect() {
 setInterval(() => {
   $('#utc-clock').textContent = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date());
   const config = selectedConfig();
-  if (config) renderDashboard(config);
+  if (view === 'detail' && config) renderDashboard(config);
+  else if (state.configs.length) renderOverview();
 }, 1_000);
 
 setTab(activeTab);

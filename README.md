@@ -77,6 +77,24 @@ At startup the backend opens a Helius `parsedTransactionSubscribe` WebSocket sub
 
 No manual stream configuration is needed beyond `HELIUS_API_KEY`. If Helius changes its beta WebSocket endpoint, set `PARSED_STREAM_URL` to the full endpoint (including its API-key query parameter) in `.env`.
 
+## Storage
+
+FlowWatch picks its storage at startup and logs the choice as `Storage: postgres`
+or `Storage: json`.
+
+- **`DATABASE_URL` set** — Postgres is the source of truth. Tables are created on
+  first boot (`configs`, `events`, `alerts`, `watched_wallets`, `launches`,
+  `app_meta`). Every event and alert is appended as its own row, so history is
+  unbounded; the process keeps only the most recent 400 events and 200 alerts in
+  memory to serve the live UI. Per-rule counters in the dashboard come from SQL
+  aggregates over the full history.
+- **`DATABASE_URL` absent** — rules and state are written to `data/*.json`, as
+  before. Convenient locally, but the files are the only copy: a container
+  without a persistent disk loses them on every redeploy.
+
+Switching between the two is a restart, not a migration — the JSON files are left
+untouched when Postgres takes over.
+
 ## Deploy on Railway
 
 The detection pipeline needs a long-running process: it holds an open
@@ -86,13 +104,16 @@ container platform instead.
 
 1. Push this repository and create a Railway project from it. `railway.json`
    configures the build, the `npm start` command and a `/api/status` healthcheck.
-2. Add a **volume mounted at `/app/data`**. Without it, `configs.json` and
-   `state.json` are wiped on every redeploy, because Railway's filesystem is
-   ephemeral.
+2. Add a **PostgreSQL service** to the same project, then set
+   `DATABASE_URL=${{Postgres.DATABASE_URL}}` on the FlowWatch service. Railway's
+   filesystem is ephemeral, so without external storage every redeploy wipes the
+   rules.
 3. Set the service variables: `HELIUS_API_KEY`, and optionally
    `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`.
-4. Leave `PUBLIC_URL` and `PORT` unset — Railway injects `PORT`, and `PUBLIC_URL`
-   is derived from `RAILWAY_PUBLIC_DOMAIN` automatically.
+4. Set `PUBLIC_URL` to the generated domain and `PORT` to the port the domain
+   targets. `PUBLIC_URL` falls back to `RAILWAY_PUBLIC_DOMAIN` when unset, but
+   that variable is not always present in the container — an incorrect value is
+   reported in the UI rather than failing silently.
 
 On boot the service registers its Helius webhook against the stable Railway
 domain, so no tunnel and no dashboard configuration are needed.
@@ -113,11 +134,12 @@ Telegram messages use HTML formatting and include the rule name, funded wallet, 
 
 ```text
 solana-exchange-scanner/
-├── data/                 # Runtime JSON persistence (rules, watches, feed, alerts)
+├── data/                 # JSON persistence, used when DATABASE_URL is unset
 ├── public/               # Trading-terminal web UI
 └── src/
     ├── server.js         # Express API, webhook handler, live detection pipeline
-    ├── configStore.js    # Validated JSON persistence and cleanup state
+    ├── configStore.js    # Validation, in-memory state and cleanup
+    ├── storage.js        # Postgres and JSON storage adapters
     ├── helius.js         # Parsed Stream client and transaction helpers
     └── telegram.js       # Telegram HTML notification sender
 ```

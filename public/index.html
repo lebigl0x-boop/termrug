@@ -27,7 +27,7 @@
     </header>
 
     <div class="subbar">
-      <div class="crumbs"><span>Scanner</span><b>/</b><strong id="crumb-name">Select a configuration</strong></div>
+      <div class="crumbs"><button type="button" id="crumb-root">Scanner</button><b>/</b><strong id="crumb-name">All scanners</strong></div>
       <div class="subbar-right">
         <div class="segmented" id="range-picker" role="group" aria-label="Time range">
           <button type="button" data-range="1h">1h</button>
@@ -71,6 +71,25 @@
           <h1>Build your first scanner.</h1>
           <p>Pick the exchange wallets, add funding and dev-buy ranges, then watch the signal funnel in real time.</p>
           <button type="button" class="btn btn-primary btn-lg" id="new-config-main">Create configuration</button>
+        </section>
+
+        <section id="overview" hidden>
+          <section class="titlebar">
+            <div class="titlebar-copy">
+              <div class="overline"><span class="dot"></span><span id="ov-active">0 ACTIVE</span><b>·</b><span id="ov-range">All time</span></div>
+              <h1>All scanners</h1>
+            </div>
+            <div class="titlebar-actions"><button type="button" class="btn btn-primary" id="new-config-overview">Create scanner <span>+</span></button></div>
+          </section>
+
+          <section class="totals">
+            <article class="total"><span class="stat-label">Scanners</span><strong id="ov-configs">0</strong></article>
+            <article class="total"><span class="stat-label">Watched wallets</span><strong id="ov-watched">0</strong></article>
+            <article class="total"><span class="stat-label">Token launches</span><strong id="ov-launches">0</strong></article>
+            <article class="total"><span class="stat-label">Confirmed signals</span><strong class="green" id="ov-signals">0</strong></article>
+          </section>
+
+          <div class="overview-grid" id="overview-grid"></div>
         </section>
 
         <div id="dashboard-content" hidden>

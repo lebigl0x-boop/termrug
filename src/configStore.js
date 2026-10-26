@@ -1,31 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createStorage, HOT_ALERTS, HOT_EVENTS } from './storage.js';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const dataDirectory = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, 'data');
-const configsPath = path.join(dataDirectory, 'configs.json');
-const statePath = path.join(dataDirectory, 'state.json');
 const DEFAULT_STATE = { watchedWallets: [], launches: [], alerts: [], events: [], heliusWebhookId: null };
 
 function cloneDefaultState() {
   return JSON.parse(JSON.stringify(DEFAULT_STATE));
-}
-
-async function readJson(file, fallback) {
-  try {
-    return JSON.parse(await readFile(file, 'utf8'));
-  } catch (error) {
-    if (error.code === 'ENOENT') return fallback;
-    throw error;
-  }
-}
-
-async function writeJson(file, data) {
-  const temporary = `${file}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-  await rename(temporary, file);
 }
 
 function number(value, field, { min = 0, strictPositive = false } = {}) {
@@ -88,47 +67,33 @@ export function normaliseConfig(input = {}, existing = {}) {
 }
 
 export class ConfigStore {
-  constructor() {
+  constructor(storage = null) {
     this.configs = [];
     this.state = cloneDefaultState();
-    this.writeQueue = Promise.resolve();
+    this.storage = storage;
   }
 
   async init() {
-    await mkdir(dataDirectory, { recursive: true });
-    this.configs = await readJson(configsPath, []);
-    this.state = { ...cloneDefaultState(), ...(await readJson(statePath, cloneDefaultState())) };
-    this.state.watchedWallets = Array.isArray(this.state.watchedWallets) ? this.state.watchedWallets : [];
-    this.state.launches = Array.isArray(this.state.launches) ? this.state.launches : [];
-    this.state.alerts = Array.isArray(this.state.alerts) ? this.state.alerts : [];
-    this.state.events = Array.isArray(this.state.events) ? this.state.events : [];
-    await this.persistAll();
+    this.storage ??= await createStorage();
+    await this.storage.init();
+    const loaded = await this.storage.load();
+    this.configs = loaded.configs;
+    this.state = { ...cloneDefaultState(), ...loaded.state };
+    this.sync();
+    return this.storage.label;
   }
 
-  queueWrite(operation) {
-    this.writeQueue = this.writeQueue.then(operation, operation);
-    return this.writeQueue;
-  }
-
-  persistConfigs() {
-    return this.queueWrite(() => writeJson(configsPath, this.configs));
-  }
-
-  persistState() {
-    return this.queueWrite(() => writeJson(statePath, this.state));
-  }
-
-  persistAll() {
-    return this.queueWrite(async () => {
-      await writeJson(configsPath, this.configs);
-      await writeJson(statePath, this.state);
-    });
+  // Keeps the file-backed adapter pointed at the current arrays, which are
+  // replaced wholesale by the filtering operations below.
+  sync() {
+    this.storage.track(this.configs, this.state);
   }
 
   async createConfig(input) {
     const config = normaliseConfig(input);
     this.configs.unshift(config);
-    await this.persistConfigs();
+    this.sync();
+    await this.storage.saveConfig(config);
     return config;
   }
 
@@ -137,7 +102,8 @@ export class ConfigStore {
     if (index === -1) return null;
     const config = normaliseConfig(input, this.configs[index]);
     this.configs[index] = config;
-    await this.persistConfigs();
+    this.sync();
+    await this.storage.saveConfig(config);
     return config;
   }
 
@@ -147,7 +113,8 @@ export class ConfigStore {
     if (this.configs.length === before) return false;
     this.state.watchedWallets = this.state.watchedWallets.filter((entry) => entry.configId !== id);
     this.state.launches = this.state.launches.filter((entry) => entry.configId !== id);
-    await this.persistAll();
+    this.sync();
+    await this.storage.removeConfig(id);
     return true;
   }
 
@@ -165,14 +132,17 @@ export class ConfigStore {
 
   async setHeliusWebhookId(id) {
     this.state.heliusWebhookId = id;
-    await this.persistState();
+    this.sync();
+    await this.storage.setMeta('heliusWebhookId', id);
   }
 
   async addEvent(event) {
-    this.state.events.unshift({ id: randomUUID(), at: new Date().toISOString(), ...event });
-    this.state.events = this.state.events.slice(0, 400);
-    await this.persistState();
-    return this.state.events[0];
+    const saved = { id: randomUUID(), at: new Date().toISOString(), ...event };
+    this.state.events.unshift(saved);
+    this.state.events = this.state.events.slice(0, HOT_EVENTS);
+    this.sync();
+    await this.storage.saveEvent(saved);
+    return saved;
   }
 
   async addWatchedWallet(entry) {
@@ -182,7 +152,8 @@ export class ConfigStore {
     if (existing) return { entry: existing, created: false };
     const watched = { id: randomUUID(), createdAt: new Date().toISOString(), alertSent: false, ...entry };
     this.state.watchedWallets.unshift(watched);
-    await this.persistState();
+    this.sync();
+    await this.storage.saveWatch(watched);
     return { entry: watched, created: true };
   }
 
@@ -197,8 +168,8 @@ export class ConfigStore {
     if (exists) return null;
     const saved = { id: randomUUID(), createdAt: new Date().toISOString(), ...launch };
     this.state.launches.unshift(saved);
-    this.state.launches = this.state.launches.slice(0, 300);
-    await this.persistState();
+    this.sync();
+    await this.storage.saveLaunch(saved);
     return saved;
   }
 
@@ -209,10 +180,12 @@ export class ConfigStore {
   }
 
   async addAlert(alert) {
-    this.state.alerts.unshift({ id: randomUUID(), at: new Date().toISOString(), ...alert });
-    this.state.alerts = this.state.alerts.slice(0, 200);
-    await this.persistState();
-    return this.state.alerts[0];
+    const saved = { id: randomUUID(), at: new Date().toISOString(), ...alert };
+    this.state.alerts.unshift(saved);
+    this.state.alerts = this.state.alerts.slice(0, HOT_ALERTS);
+    this.sync();
+    await this.storage.saveAlert(saved);
+    return saved;
   }
 
   async markAlertSent(watchId) {
@@ -220,14 +193,36 @@ export class ConfigStore {
     if (!watch) return null;
     watch.alertSent = true;
     watch.alertedAt = new Date().toISOString();
-    await this.persistState();
+    this.sync();
+    await this.storage.updateWatch(watch);
     return watch;
+  }
+
+  /**
+   * Per-rule counters. Postgres answers from the full history; the file-backed
+   * adapter has none, so the in-memory window is counted instead.
+   */
+  async stats(since = null) {
+    const fromStorage = await this.storage.statsByConfig(since);
+    if (fromStorage) return fromStorage;
+    const floor = since ? new Date(since).getTime() : null;
+    const within = (item) => !floor || new Date(item.at).getTime() >= floor;
+    return Object.fromEntries(this.configs.map((config) => {
+      const events = this.state.events.filter((event) => event.configId === config.id && within(event));
+      return [config.id, {
+        funding: events.filter((event) => event.type === 'FUNDING_MATCH').length,
+        launches: events.filter((event) => event.type === 'TOKEN_CREATE').length,
+        signals: this.state.alerts.filter((alert) => alert.configId === config.id && within(alert)).length,
+        lastAt: events[0]?.at ?? null
+      }];
+    }));
   }
 
   async cleanup(now = Date.now()) {
     const before = this.state.watchedWallets.length + this.state.launches.length;
     this.state.watchedWallets = this.state.watchedWallets.filter((watch) => new Date(watch.expiresAt).getTime() > now && !watch.alertSent);
     this.state.launches = this.state.launches.filter((launch) => new Date(launch.expiresAt).getTime() > now);
-    if (before !== this.state.watchedWallets.length + this.state.launches.length) await this.persistState();
+    this.sync();
+    if (before !== this.state.watchedWallets.length + this.state.launches.length) await this.storage.pruneExpired(now);
   }
 }

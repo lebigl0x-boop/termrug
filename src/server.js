@@ -27,8 +27,9 @@ const publicUrl = (process.env.PUBLIC_URL || (railwayDomain ? `https://${railway
 const store = new ConfigStore();
 const streamStatus = { connected: false, configured: Boolean(process.env.HELIUS_API_KEY), label: 'Starting' };
 const webhookStatus = { state: 'pending', reason: '', addresses: 0, url: '' };
+let statsCache = {};
 
-await store.init();
+const storageLabel = await store.init();
 
 const app = express();
 const server = createServer(app);
@@ -45,6 +46,7 @@ function snapshot() {
     events: store.state.events,
     streamStatus,
     webhookStatus,
+    stats: statsCache,
     webhookUrl: `${publicUrl}/webhook/helius`,
     serverTime: new Date().toISOString()
   };
@@ -226,6 +228,16 @@ async function processParsedTransaction(transaction) {
   }
 }
 
+// Per-rule counters come from storage, which may hold more history than the
+// in-memory window. Cached because snapshot() is synchronous and hot.
+async function refreshStats() {
+  try {
+    statsCache = await store.stats();
+  } catch (error) {
+    console.error('Stats refresh failed:', error.message);
+  }
+}
+
 // Keeps the account's FlowWatch webhook aligned with the enabled rules' source wallets.
 async function syncWebhook(trigger) {
   try {
@@ -265,6 +277,7 @@ app.post('/api/configs', async (request, response, next) => {
     const config = await store.createConfig(request.body);
     await event('CONFIG_CREATED', { configId: config.id, configName: config.name, message: `Config “${config.name}” created`, severity: 'info' });
     response.status(201).json(config);
+    await refreshStats();
     await syncWebhook('config created');
   } catch (error) { next(error); }
 });
@@ -275,6 +288,7 @@ app.put('/api/configs/:id', async (request, response, next) => {
     if (!config) return response.status(404).json({ error: 'Config not found.' });
     await event('CONFIG_UPDATED', { configId: config.id, configName: config.name, message: `Config “${config.name}” updated`, severity: 'info' });
     response.json(config);
+    await refreshStats();
     await syncWebhook('config updated');
   } catch (error) { next(error); }
 });
@@ -285,6 +299,7 @@ app.delete('/api/configs/:id', async (request, response, next) => {
     if (!await store.deleteConfig(request.params.id)) return response.status(404).json({ error: 'Config not found.' });
     await event('CONFIG_DELETED', { configId: request.params.id, configName: config?.name || 'Deleted config', message: `Config “${config?.name || ''}” deleted`, severity: 'info' });
     response.status(204).end();
+    await refreshStats();
     await syncWebhook('config deleted');
   } catch (error) { next(error); }
 });
@@ -315,11 +330,14 @@ const helius = new HeliusParsedStream({
 });
 
 setInterval(() => store.cleanup().then(() => broadcast()).catch(console.error), 30_000).unref();
+setInterval(() => refreshStats().then(() => broadcast()).catch(console.error), 15_000).unref();
 helius.start();
 
 server.listen(port, () => {
   console.log(`Solana Exchange Scanner listening on ${publicUrl}`);
   console.log(`Helius webhook: ${publicUrl}/webhook/helius`);
+  console.log(`Storage: ${storageLabel}`);
+  refreshStats().catch(console.error);
   syncWebhook('startup').catch(console.error);
 });
 
