@@ -238,20 +238,26 @@ async function processParsedTransaction(transaction) {
  * watch. Since watch windows are rare and short, the subscription is opened only
  * while at least one is open, which is where nearly all the credit spend went.
  */
-function activeWatchCount(now = Date.now()) {
-  return store.state.watchedWallets.filter((watch) => !watch.alertSent && new Date(watch.expiresAt).getTime() > now).length;
+// Watches belonging to a paused rule are dead weight: they would keep the
+// subscription open for launches no alert could ever come from.
+function activeWatchWallets(now = Date.now()) {
+  const enabled = new Set(store.configs.filter((config) => config.enabled).map((config) => config.id));
+  return [...new Set(store.state.watchedWallets
+    .filter((watch) => !watch.alertSent && enabled.has(watch.configId) && new Date(watch.expiresAt).getTime() > now)
+    .map((watch) => watch.wallet))];
 }
 
 function syncStream(reason) {
-  const needed = activeWatchCount() > 0;
-  if (needed === helius.running) return;
-  if (needed) {
-    console.log(`Parsed Stream opening (${reason}) — ${activeWatchCount()} wallet(s) under watch`);
-    helius.start();
-  } else {
+  const wallets = activeWatchWallets();
+  if (!wallets.length) {
+    if (!helius.running) return;
     console.log(`Parsed Stream closing (${reason}) — no wallet under watch`);
     helius.stop('Standby');
+    broadcast();
+    return;
   }
+  if (!helius.applyAccounts(wallets)) return;
+  console.log(`Parsed Stream subscribed (${reason}) — filtering on ${wallets.length} wallet(s)`);
   broadcast();
 }
 
@@ -316,6 +322,7 @@ app.put('/api/configs/:id', async (request, response, next) => {
     await event('CONFIG_UPDATED', { configId: config.id, configName: config.name, message: `Config “${config.name}” updated`, severity: 'info' });
     await refreshStats();
     await syncWebhook('config updated');
+    syncStream('config updated');
     response.json(config);
   } catch (error) { next(error); }
 });
@@ -327,6 +334,7 @@ app.delete('/api/configs/:id', async (request, response, next) => {
     await event('CONFIG_DELETED', { configId: request.params.id, configName: config?.name || 'Deleted config', message: `Config “${config?.name || ''}” deleted`, severity: 'info' });
     await refreshStats();
     await syncWebhook('config deleted');
+    syncStream('config deleted');
     response.status(204).end();
   } catch (error) { next(error); }
 });

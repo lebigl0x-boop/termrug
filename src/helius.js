@@ -13,6 +13,7 @@ export class HeliusParsedStream {
     this.socket = null;
     this.retry = null;
     this.stopped = true;
+    this.accounts = [];
     this.retryDelay = 1000;
   }
 
@@ -46,6 +47,9 @@ export class HeliusParsedStream {
         params: [{
           programs: [PUMP_FUN_PROGRAM],
           instructionNames: INSTRUCTIONS,
+          // One group, OR semantics: deliver only transactions touching a watched
+          // wallet. Without it the whole pump.fun firehose is delivered and billed.
+          ...(this.accounts.length ? { accounts: [this.accounts] } : {}),
           includeCpi: true,
           includeFailed: false
         }]
@@ -69,7 +73,9 @@ export class HeliusParsedStream {
 
     socket.on('error', (error) => this.onError?.(error));
     socket.on('close', () => {
-      if (this.socket === socket) this.socket = null;
+      // A socket replaced by resubscribe() is no longer ours: ignore its close.
+      if (this.socket !== socket) return;
+      this.socket = null;
       if (!this.stopped) this.scheduleReconnect();
     });
   }
@@ -79,6 +85,33 @@ export class HeliusParsedStream {
     this.onStatus?.({ connected: false, configured: true, label: 'Reconnecting' });
     this.retry = setTimeout(() => this.connect(), this.retryDelay);
     this.retryDelay = Math.min(this.retryDelay * 2, 30_000);
+  }
+
+  /**
+   * Points the subscription at `accounts`, starting or re-subscribing as needed.
+   * Returns true when something actually changed.
+   */
+  applyAccounts(accounts) {
+    const next = [...new Set(accounts)].sort();
+    const unchanged = this.running
+      && next.length === this.accounts.length
+      && next.every((account, index) => account === this.accounts[index]);
+    if (unchanged) return false;
+    this.accounts = next;
+    if (this.running) this.resubscribe();
+    else this.start();
+    return true;
+  }
+
+  // The filter is fixed at subscribe time, so a changed account set means a new
+  // connection rather than a second subscription on the same socket.
+  resubscribe() {
+    clearTimeout(this.retry);
+    this.retryDelay = 1000;
+    const previous = this.socket;
+    this.socket = null;
+    previous?.close();
+    this.connect();
   }
 
   stop(label = 'Offline') {

@@ -125,20 +125,32 @@ The pump.fun subscription is program-wide — `create`, `create_v2`, `buy` and
 running FlowWatch. Almost all of it is discarded: a create or buy only matters
 when its signer is a wallet that a funding transfer just put under watch.
 
-The subscription is therefore opened only while at least one watch window is
-open, and closed again when the last one expires:
+Two mechanisms keep that under control.
 
-- A matching funding transfer opens it immediately.
-- The 30-second cleanup pass closes it once no watch remains.
-- Startup opens it only if watches were restored from storage.
+**Server-side account filtering.** The subscription carries
+`accounts: [[...watched wallets]]`, one group with OR semantics, so Helius only
+delivers transactions touching a wallet currently under watch. Measured on the
+live stream: 9.8 messages/second unfiltered, 0.00 with the filter on wallets
+that are not trading. The filter is fixed at subscribe time, so a changed wallet
+set means a new connection — `applyAccounts()` re-subscribes only when the set
+actually differs.
 
-With rules that match a handful of transfers a day, the stream runs for a few
-hours instead of twenty-four. The UI reports the closed state as **Standby** in
-amber — a deliberate idle state, not a failure.
+**Opening the subscription only when it is useful.** It opens on a funding match
+and closes from the cleanup pass once no watch remains. Watches belonging to a
+paused rule do not count: they could never produce an alert, so they must not
+hold the subscription open.
+
+Both matter. Filtering alone would keep an idle connection; gating alone breaks
+down when a funding range matches often enough for watch windows to overlap
+continuously, which is what a routine exchange withdrawal size will do.
+
+The UI reports the closed state as **Standby** in amber — a deliberate idle
+state, not a failure.
 
 The trade-off: when a funding transfer arrives, the subscription needs about a
-second to connect. A wallet that creates its token within that window would be
-missed. In practice a launch follows its funding by far more than a second.
+second to connect or re-subscribe. A wallet that creates its token within that
+window would be missed. In practice a launch follows its funding by far more
+than a second.
 
 ## Parsed Stream payload
 
