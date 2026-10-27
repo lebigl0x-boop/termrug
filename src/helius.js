@@ -207,42 +207,47 @@ async function webhookRequest(method, suffix, apiKey, body) {
   return payload;
 }
 
-// Owns exactly one webhook, tracked by the id stored in state.json. Any other
-// webhook on the account (other projects) is never read, updated or deleted.
+// Reconciles the Helius account against the enabled rules. Every webhook whose
+// URL is this app's own endpoint is treated as ours — that is what makes the
+// sync idempotent after the stored id is lost, instead of creating a duplicate
+// that silently doubles delivery billing. Webhooks pointing anywhere else
+// (other projects on the same Helius account) are never read or touched.
 export async function syncHeliusWebhook({ apiKey, publicUrl, addresses, webhookId }) {
   if (!apiKey) return { status: 'skipped', reason: 'HELIUS_API_KEY is missing.' };
   if (!isPubliclyReachable(publicUrl)) {
     return { status: 'skipped', reason: `PUBLIC_URL (${publicUrl}) is not reachable from the internet, so Helius cannot deliver funding transfers.` };
   }
 
-  const accountAddresses = [...new Set(addresses.filter(Boolean))];
   const webhookURL = `${publicUrl}${WEBHOOK_PATH}`;
+  const accountAddresses = [...new Set(addresses.filter(Boolean))];
+  const all = await webhookRequest('GET', '', apiKey);
+  const ours = (Array.isArray(all) ? all : []).filter((hook) => hook.webhookURL === webhookURL);
+
+  // No enabled rule means no address to watch. Leaving the webhook registered
+  // would keep Helius delivering — and billing — transfers nothing can act on.
   if (!accountAddresses.length) {
-    return { status: 'skipped', reason: 'No enabled rule declares a source wallet.' };
+    for (const hook of ours) await webhookRequest('DELETE', `/${hook.webhookID}`, apiKey);
+    return { status: 'skipped', id: null, removed: ours.length, reason: 'No enabled rule declares a source wallet.' };
   }
 
-  let existing = null;
-  if (webhookId) {
-    try {
-      existing = await webhookRequest('GET', `/${webhookId}`, apiKey);
-    } catch (error) {
-      if (error.status !== 404) throw error;
-    }
+  const keep = ours.find((hook) => hook.webhookID === webhookId) ?? ours[0] ?? null;
+  for (const hook of ours) {
+    if (hook.webhookID !== keep?.webhookID) await webhookRequest('DELETE', `/${hook.webhookID}`, apiKey);
   }
-
+  const removed = Math.max(0, ours.length - 1);
   const desired = { webhookURL, webhookType: 'enhanced', transactionTypes: ['TRANSFER'], accountAddresses };
 
-  if (!existing) {
+  if (!keep) {
     const created = await webhookRequest('POST', '', apiKey, desired);
-    return { status: 'created', id: created.webhookID ?? created.webhookId, webhookURL, accountAddresses };
+    return { status: 'created', id: created.webhookID ?? created.webhookId, webhookURL, accountAddresses, removed };
   }
 
-  const sameUrl = existing.webhookURL === webhookURL;
-  const sameAddresses = [...(existing.accountAddresses ?? [])].sort().join() === [...accountAddresses].sort().join();
-  if (sameUrl && sameAddresses) {
-    return { status: 'unchanged', id: webhookId, webhookURL, accountAddresses };
+  // The list endpoint omits accountAddresses, so the comparison needs a read by id.
+  const current = await webhookRequest('GET', `/${keep.webhookID}`, apiKey);
+  const sameAddresses = [...(current.accountAddresses ?? [])].sort().join() === [...accountAddresses].sort().join();
+  if (sameAddresses && !removed) {
+    return { status: 'unchanged', id: keep.webhookID, webhookURL, accountAddresses, removed };
   }
-
-  await webhookRequest('PUT', `/${webhookId}`, apiKey, desired);
-  return { status: 'updated', id: webhookId, webhookURL, accountAddresses };
+  await webhookRequest('PUT', `/${keep.webhookID}`, apiKey, desired);
+  return { status: 'updated', id: keep.webhookID, webhookURL, accountAddresses, removed };
 }

@@ -280,19 +280,20 @@ async function syncWebhook(trigger) {
       addresses: store.enabledWatchAddresses(),
       webhookId: store.state.heliusWebhookId
     });
-    if (result.id && result.id !== store.state.heliusWebhookId) await store.setHeliusWebhookId(result.id);
+    if ((result.id ?? null) !== store.state.heliusWebhookId) await store.setHeliusWebhookId(result.id ?? null);
     Object.assign(webhookStatus, {
       state: result.status,
       reason: result.reason ?? '',
       addresses: result.accountAddresses?.length ?? 0,
       url: result.webhookURL ?? `${publicUrl}${'/webhook/helius'}`
     });
+    const dropped = result.removed ? ` (${result.removed} duplicate webhook(s) removed)` : '';
     if (result.status === 'skipped') {
-      console.warn(`Helius webhook not synced (${trigger}): ${result.reason}`);
-      await event('WEBHOOK_SKIPPED', { message: `Webhook inactive — ${result.reason}`, severity: 'error' });
-    } else if (result.status !== 'unchanged') {
-      console.log(`Helius webhook ${result.status} (${trigger}): ${result.webhookURL} — ${result.accountAddresses.length} address(es)`);
-      await event('WEBHOOK_SYNCED', { message: `Webhook ${result.status} — watching ${result.accountAddresses.length} address(es)`, severity: 'info' });
+      console.warn(`Helius webhook not synced (${trigger}): ${result.reason}${dropped}`);
+      await event('WEBHOOK_SKIPPED', { message: `Webhook inactive — ${result.reason}${dropped}`, severity: 'error' });
+    } else if (result.status !== 'unchanged' || result.removed) {
+      console.log(`Helius webhook ${result.status} (${trigger}): ${result.webhookURL} — ${result.accountAddresses.length} address(es)${dropped}`);
+      await event('WEBHOOK_SYNCED', { message: `Webhook ${result.status} — watching ${result.accountAddresses.length} address(es)${dropped}`, severity: 'info' });
     }
   } catch (error) {
     Object.assign(webhookStatus, { state: 'error', reason: error.message });

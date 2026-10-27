@@ -45,9 +45,16 @@ create / update / delete — it pushes the `watchAddresses` of all enabled rules
 an **Enhanced Transaction** webhook pointing at `${PUBLIC_URL}/webhook/helius`,
 with native SOL `TRANSFER` events included.
 
-It owns exactly one webhook, tracked by the id stored in `data/state.json`. Any
-other webhook on the Helius account is never read, updated or deleted, so this is
-safe to run alongside other projects.
+Ownership is decided by the URL: every webhook on the account whose `webhookURL`
+is this app's own endpoint is treated as FlowWatch's, whatever created it. That
+is what keeps the sync idempotent when the stored id is lost — a storage reset
+would otherwise leave the old webhook in place and register a second one, and
+Helius bills every delivery, so the account would quietly pay twice for the same
+transfers. Extra copies are collapsed into one on the next sync. Webhooks
+pointing anywhere else are never read, updated or deleted.
+
+When no enabled rule declares a source wallet, the webhook is deleted rather than
+left registered: an unused webhook keeps delivering, and keeps billing.
 
 Two conditions must hold, and both are reported in the UI event feed and in
 `webhookStatus` when they don't:
