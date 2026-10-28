@@ -303,3 +303,32 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 @media (max-width: 1080px) { .totals { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .pill.idle { color: var(--amber); border-color: rgba(242,181,68,.28); background: rgba(242,181,68,.08); }
 .dock-item.is-idle i { background: var(--amber); }
+
+/* ---------- rule mode picker ---------- */
+.mode-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mode-picker button { text-align: left; padding: 11px 13px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.mode-picker button:hover { border-color: #2a303a; }
+.mode-picker button.is-active { border-color: rgba(91,108,255,.55); background: rgba(91,108,255,.1); }
+.mode-picker strong { display: block; font-size: 12.5px; }
+.mode-picker small { display: block; margin-top: 3px; color: var(--faint); font-size: 11.5px; line-height: 1.45; }
+.mode-picker button.is-active strong { color: var(--blue); }
+
+/* ---------- range rows: bounds or target ± tolerance ---------- */
+.range-row { gap: 6px; }
+.range-row .row-index { display: none; width: 16px; flex: none; font-size: 10.5px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
+.repeater.ordered .range-row .row-index { display: inline-block; }
+.range-fields { display: none; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.range-row[data-mode="bounds"] .range-fields.bounds { display: flex; }
+.range-row[data-mode="target"] .range-fields.target { display: flex; }
+.range-fields select { height: 32px; padding: 0 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); font-size: 12px; }
+.range-fields select:focus { outline: none; border-color: var(--blue); }
+.row-mode { width: 26px; height: 26px; flex: none; border-radius: 7px; color: var(--faint); font-size: 13px; line-height: 1; }
+.row-mode:hover { color: var(--blue); background: rgba(91,108,255,.1); }
+
+/* ---------- bundle fingerprint card ---------- */
+.fingerprint { display: flex; flex-direction: column; gap: 6px; }
+.fingerprint-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); }
+.fingerprint-row b { font-size: 10px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
+.fingerprint-row span { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.fingerprint-row small { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ov-badges { display: flex; gap: 6px; flex: none; }

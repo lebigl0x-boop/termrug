@@ -179,6 +179,27 @@ Two details matter and are easy to get wrong:
   The funded wallet is `decoded.args.creator`, which is why the create handler
   prefers it over the `user` account.
 
+## Rule types
+
+A rule runs in one of two modes.
+
+**Exchange funding** is the original chain: an exchange hot wallet funds a fresh
+wallet, that wallet launches on pump.fun inside the window, and its dev buy
+lands in range. It needs source addresses and is driven by the Helius webhook.
+
+**Bundle fingerprint** recognises a launcher by the amounts its own wallets buy
+back with. Those amounts repeat across launches within a few tenths of a
+percent, so an ordered list of four windows separates them from noise. Launches
+arrive from PumpPortal's free `subscribeNewToken` stream, an optional dev buy
+range narrows them to candidates, and each candidate's mint joins the Helius
+account filter until its buys resolve. A buy outside its window drops the
+candidate at once.
+
+Both modes read ranges in either form: explicit bounds, or a target with a
+tolerance in percent or SOL. The second form is what bundle amounts need —
+`18.204 ± 0.5%` covers the observed spread, while `18.204` to `18.204` would
+demand an exact lamport hit.
+
 ## Detection details
 
 - A matching funding transfer creates a separate, expiring watched-wallet record for its rule.
@@ -202,6 +223,7 @@ solana-exchange-scanner/
     ├── configStore.js    # Validation, in-memory state and cleanup
     ├── storage.js        # Postgres and JSON storage adapters
     ├── helius.js         # Parsed Stream client and transaction helpers
+    ├── pumpPortal.js     # Free pump.fun launch stream for bundle rules
     └── telegram.js       # Telegram HTML notification sender
 ```
 

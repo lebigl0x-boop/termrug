@@ -66,7 +66,7 @@
 
           <section class="totals">
             <article class="total"><span class="stat-label">Scanners</span><strong id="ov-configs">0</strong></article>
-            <article class="total"><span class="stat-label">Watched wallets</span><strong id="ov-watched">0</strong></article>
+            <article class="total"><span class="stat-label" id="label-watched">Watched wallets</span><strong id="ov-watched">0</strong></article>
             <article class="total"><span class="stat-label">Token launches</span><strong id="ov-launches">0</strong></article>
             <article class="total"><span class="stat-label">Confirmed signals</span><strong class="green" id="ov-signals">0</strong></article>
           </section>
@@ -91,21 +91,22 @@
             <article class="card">
               <header class="card-head"><h2>Observation</h2><span class="card-note" id="card-window">60 min</span></header>
               <div class="stat">
-                <span class="stat-label">Watched wallets</span>
+                <span class="stat-label" id="detail-watched-label">Watched wallets</span>
                 <strong class="stat-value" id="metric-watched">0</strong>
-                <small class="stat-foot">inside the active window</small>
+                <small class="stat-foot" id="foot-watched">inside the active window</small>
               </div>
               <div class="divider"></div>
               <div class="stat-row">
                 <div><span class="stat-label">Confirmed</span><strong class="stat-sub green" id="metric-alerts">0</strong></div>
-                <div><span class="stat-label">Sources</span><strong class="stat-sub" id="metric-sources">0</strong></div>
+                <div><span class="stat-label" id="detail-sources-label">Sources</span><strong class="stat-sub" id="metric-sources">0</strong></div>
               </div>
               <div class="chips" id="selected-wallet-chips"></div>
             </article>
 
             <article class="card">
-              <header class="card-head"><h2>Signal funnel</h2><span class="live"><i></i>LIVE</span></header>
+              <header class="card-head"><h2 id="card2-title">Signal funnel</h2><span class="live"><i></i>LIVE</span></header>
               <div class="funnel" id="funnel"></div>
+              <div class="fingerprint" id="fingerprint" hidden></div>
               <div class="divider"></div>
               <div class="bar-split" id="funnel-split"></div>
               <div class="legend">
@@ -116,10 +117,10 @@
             </article>
 
             <article class="card">
-              <header class="card-head"><h2>Thresholds</h2><span class="card-note">SOL</span></header>
+              <header class="card-head"><h2 id="card3-title">Thresholds</h2><span class="card-note">SOL</span></header>
               <div class="thresholds">
                 <div class="threshold-group">
-                  <span class="stat-label">Funding ranges <em id="metric-funding">0</em></span>
+                  <span class="stat-label" id="label-funding">Funding ranges <em id="metric-funding">0</em></span>
                   <div class="range-rows" id="funding-rows"></div>
                 </div>
                 <div class="threshold-group">
@@ -133,7 +134,7 @@
           <section class="panel">
             <div class="panel-tabs" role="tablist">
               <button type="button" class="tab is-active" data-tab="feed" role="tab">Live feed <em id="tab-feed-count">0</em></button>
-              <button type="button" class="tab" data-tab="wallets" role="tab">Watched wallets <em id="tab-wallets-count">0</em></button>
+              <button type="button" class="tab" data-tab="wallets" role="tab"><span id="tab-wallets-label">Watched wallets</span> <em id="tab-wallets-count">0</em></button>
               <button type="button" class="tab" data-tab="alerts" role="tab">Alerts <em id="tab-alerts-count">0</em></button>
               <span class="panel-tabs-spacer"></span>
               <span class="card-note" id="range-note">All time</span>
@@ -152,7 +153,7 @@
             <div class="panel-body" data-panel="wallets" hidden>
               <div class="table-scroll">
                 <table class="grid">
-                  <thead><tr><th>Funded wallet</th><th class="num">Funding</th><th>Source</th><th class="num">Remaining</th><th></th></tr></thead>
+                  <thead><tr id="wallets-head"><th>Funded wallet</th><th class="num">Funding</th><th>Source</th><th class="num">Remaining</th><th></th></tr></thead>
                   <tbody id="watched-wallets"></tbody>
                 </table>
               </div>
@@ -199,7 +200,18 @@
           <input type="hidden" name="id" />
           <label class="field">Scanner name<input name="name" required maxlength="60" placeholder="Binance 15 SOL launcher" /></label>
 
-          <section class="rule-block">
+          <div class="mode-picker" id="mode-picker" role="group" aria-label="Rule type">
+            <button type="button" class="is-active" data-mode="funding">
+              <strong>Exchange funding</strong>
+              <small>An exchange funds a fresh wallet, which launches and dev buys.</small>
+            </button>
+            <button type="button" data-mode="bundle">
+              <strong>Bundle fingerprint</strong>
+              <small>A launch whose first buys repeat a known amount sequence.</small>
+            </button>
+          </div>
+
+          <section class="rule-block" data-for="funding">
             <div class="rule-head">
               <div><strong>Source wallets</strong><small>Any outgoing SOL transfer from these addresses can enter the funnel.</small></div>
               <button type="button" class="link-btn" data-add="wallet">+ Add wallet</button>
@@ -208,7 +220,7 @@
           </section>
 
           <div class="rule-duo">
-            <section class="rule-block">
+            <section class="rule-block" data-for="funding">
               <div class="rule-head">
                 <div><strong>Funding ranges</strong><small>Wallet is watched when funding matches any range.</small></div>
                 <button type="button" class="link-btn" data-add="funding">+ Add</button>
@@ -217,15 +229,23 @@
             </section>
             <section class="rule-block">
               <div class="rule-head">
-                <div><strong>Dev buy ranges</strong><small>Alert only when the buy matches any range.</small></div>
+                <div><strong>Dev buy ranges</strong><small data-for="funding">Alert only when the buy matches any range.</small><small data-for="bundle">Pre-filter on the launch dev buy. Leave empty to follow every launch.</small></div>
                 <button type="button" class="link-btn" data-add="devbuy">+ Add</button>
               </div>
               <div id="devbuy-fields" class="repeater"></div>
             </section>
           </div>
 
+          <section class="rule-block" data-for="bundle">
+            <div class="rule-head">
+              <div><strong>Bundle buys <span class="card-note">in order</span></strong><small>The nth buy after the launch must land in the nth window. All of them must match.</small></div>
+              <button type="button" class="link-btn" data-add="bundle">+ Add buy</button>
+            </div>
+            <div id="bundle-fields" class="repeater ordered"></div>
+          </section>
+
           <div class="settings-row">
-            <label class="field">Watch window<input name="timeWindowMinutes" type="number" min="1" step="1" required value="60" /><small>minutes after funding</small></label>
+            <label class="field">Watch window<input name="timeWindowMinutes" type="number" min="1" step="1" required value="60" /><small data-for="funding">minutes after funding</small><small data-for="bundle">minutes to follow a launch</small></label>
             <label class="field">Telegram chat ID<input name="telegramChatId" placeholder="-100…" /><small>optional rule override</small></label>
             <label class="toggle-field"><input name="enabled" type="checkbox" checked /><span></span><b>Scanner active</b></label>
           </div>
@@ -242,7 +262,18 @@
       <div class="repeat-row"><span class="handle">⠿</span><input data-wallet placeholder="Solana wallet address" required /><button type="button" class="remove-row" aria-label="Remove">×</button></div>
     </template>
     <template id="range-row-template">
-      <div class="repeat-row range-row"><input data-min type="number" min="0" step="0.0001" placeholder="Min" required /><span class="to">to</span><input data-max type="number" min="0" step="0.0001" placeholder="Max" required /><button type="button" class="remove-row" aria-label="Remove">×</button></div>
+      <div class="repeat-row range-row" data-mode="target">
+        <span class="row-index"></span>
+        <div class="range-fields bounds">
+          <input data-min type="number" min="0" step="0.000001" placeholder="Min" /><span class="to">to</span><input data-max type="number" min="0" step="0.000001" placeholder="Max" />
+        </div>
+        <div class="range-fields target">
+          <input data-target type="number" min="0" step="0.000001" placeholder="Target" /><span class="to">±</span><input data-tolerance type="number" min="0" step="0.01" placeholder="0.5" />
+          <select data-tolerance-mode><option value="percent">%</option><option value="absolute">SOL</option></select>
+        </div>
+        <button type="button" class="row-mode" title="Switch between bounds and target ± tolerance">⇄</button>
+        <button type="button" class="remove-row" aria-label="Remove">×</button>
+      </div>
     </template>
 
     <script type="module" src="/app.js"></script>

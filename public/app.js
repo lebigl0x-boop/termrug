@@ -1,8 +1,18 @@
-const state = { configs: [], watchedWallets: [], alerts: [], events: [], streamStatus: {}, webhookStatus: {}, stats: {}, webhookUrl: '' };
+const state = { configs: [], watchedWallets: [], alerts: [], events: [], candidates: [], streamStatus: {}, webhookStatus: {}, stats: {}, webhookUrl: '' };
 let selectedConfigId = null;
 let activeTab = 'feed';
 let view = 'overview';
 let activeRange = 'all';
+let formMode = 'funding';
+// Deep link: ?config=<id> opens that scanner directly, and navigating keeps the
+// URL in step so a view can be shared or reloaded.
+const requestedConfigId = new URLSearchParams(location.search).get('config');
+if (requestedConfigId) { selectedConfigId = requestedConfigId; view = 'detail'; }
+
+function syncLocation() {
+  const next = view === 'detail' && selectedConfigId ? `?config=${encodeURIComponent(selectedConfigId)}` : location.pathname;
+  if (location.search !== (next.startsWith('?') ? next : '')) history.replaceState(null, '', next);
+}
 
 const $ = (selector) => document.querySelector(selector);
 const short = (value = '') => value.length > 13 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value;
@@ -17,9 +27,9 @@ const els = {
   dashboardEmpty: $('#dashboard-empty'), dashboard: $('#dashboard-content'),
   eventRows: $('#event-rows'), eventsEmpty: $('#events-empty'), watched: $('#watched-wallets'), walletsEmpty: $('#wallets-empty'),
   alerts: $('#alert-list'), alertsEmpty: $('#alerts-empty'), modal: $('#config-modal'), form: $('#config-form'), formError: $('#form-error'),
-  walletFields: $('#wallet-fields'), fundingFields: $('#funding-fields'), devBuyFields: $('#devbuy-fields'),
+  walletFields: $('#wallet-fields'), fundingFields: $('#funding-fields'), devBuyFields: $('#devbuy-fields'), bundleFields: $('#bundle-fields'),
   webhookBanner: $('#webhook-banner'), webhookState: $('#webhook-state'), funnel: $('#funnel'), funnelSplit: $('#funnel-split'),
-  fundingRows: $('#funding-rows'), devBuyRows: $('#devbuy-rows'),
+  fundingRows: $('#funding-rows'), devBuyRows: $('#devbuy-rows'), fingerprint: $('#fingerprint'),
   overview: $('#overview'), overviewGrid: $('#overview-grid')
 };
 
@@ -27,6 +37,7 @@ const rangeList = (config, key, legacyMin, legacyMax) => Array.isArray(config?.[
 const configRanges = (config, key) => key === 'fundingRanges' ? rangeList(config, key, 'minSol', 'maxSol') : rangeList(config, key, 'minDevBuy', 'maxDevBuy');
 const selectedConfig = () => state.configs.find((config) => config.id === selectedConfigId) || null;
 const byConfig = (items) => items.filter((item) => item.configId === selectedConfigId);
+const isBundle = (config) => config?.mode === 'bundle';
 const inRange = (items) => { const span = rangeWindows[activeRange]; if (span === Infinity) return items; const floor = Date.now() - span; return items.filter((item) => new Date(item.at).getTime() >= floor); };
 const statsFor = (configId) => {
   const events = inRange(state.events.filter((event) => event.configId === configId));
@@ -64,6 +75,7 @@ function render() {
   els.dashboardEmpty.hidden = hasConfigs;
   els.overview.hidden = !hasConfigs || onDetail;
   els.dashboard.hidden = !onDetail;
+  syncLocation();
   if (onDetail) renderDashboard(config);
   else if (hasConfigs) renderOverview();
 }
@@ -120,21 +132,39 @@ function renderOverview() {
     const head = create('div', 'ov-head');
     const title = create('div', 'ov-title');
     const copy = create('div');
-    copy.append(create('strong', null, config.name), create('div', 'ov-meta', `${config.watchAddresses.length} source${config.watchAddresses.length === 1 ? '' : 's'} · ${config.timeWindowMinutes} min window`));
+    const subtitle = isBundle(config)
+      ? `${config.bundleBuys?.length ?? 0} buy fingerprint · ${config.timeWindowMinutes} min window`
+      : `${config.watchAddresses.length} source${config.watchAddresses.length === 1 ? '' : 's'} · ${config.timeWindowMinutes} min window`;
+    copy.append(create('strong', null, config.name), create('div', 'ov-meta', subtitle));
     title.append(create('i'), copy);
-    head.append(title, create('span', `pill ${config.enabled ? 'good' : ''}`, config.enabled ? 'Active' : 'Paused'));
+    const badges = create('div', 'ov-badges');
+    badges.append(
+      create('span', 'pill', isBundle(config) ? 'Bundle' : 'Funding'),
+      create('span', `pill ${config.enabled ? 'good' : ''}`, config.enabled ? 'Active' : 'Paused')
+    );
+    head.append(title, badges);
 
     const grid = create('div', 'ov-stats');
-    [['Watched', stats.watched, ''], ['Launches', stats.launches, ''], ['Signals', stats.signals, 'green']].forEach(([label, value, tone]) => {
+    const liveCandidates = isBundle(config) ? (state.candidates || []).filter((item) => item.configId === config.id).length : stats.watched;
+    const columns = isBundle(config)
+      ? [['Candidates', liveCandidates, ''], ['Buys', config.bundleBuys?.length ?? 0, ''], ['Signals', stats.signals, 'green']]
+      : [['Watched', stats.watched, ''], ['Launches', stats.launches, ''], ['Signals', stats.signals, 'green']];
+    columns.forEach(([label, value, tone]) => {
       const box = create('div');
       box.append(create('span', 'stat-label', label), create('b', tone, String(value)));
       grid.append(box);
     });
 
     const ranges = create('div', 'ov-ranges');
-    [['Funding', configRanges(config, 'fundingRanges')], ['Dev buy', configRanges(config, 'devBuyRanges')]].forEach(([label, list]) => {
+    const rows = isBundle(config)
+      ? [['Dev buy', config.devBuyRanges ?? []], ['Bundle', config.bundleBuys ?? []]]
+      : [['Funding', configRanges(config, 'fundingRanges')], ['Dev buy', configRanges(config, 'devBuyRanges')]];
+    rows.forEach(([label, list]) => {
       const row = create('div', 'ov-range');
-      row.append(create('span', null, label), create('span', null, list.map((range) => `${Number(range.min).toFixed(2)}–${Number(range.max).toFixed(2)}`).join('  ·  ')));
+      const text = list.length
+        ? list.map((range) => Number(range.target ?? range.min).toFixed(range.target != null ? 3 : 2)).join('  ·  ')
+        : 'any';
+      row.append(create('span', null, label), create('span', null, text));
       ranges.append(row);
     });
 
@@ -173,11 +203,33 @@ function renderDashboard(config) {
   chips.replaceChildren();
   config.watchAddresses.forEach((wallet) => chips.append(create('span', 'chip-addr', short(wallet))));
 
-  renderFunnel(events, alerts);
-  renderThresholds(funding, devBuys);
+  const bundle = isBundle(config);
+  const candidates = bundle ? byConfig(state.candidates || []) : [];
+  $('#card2-title').textContent = bundle ? 'Bundle fingerprint' : 'Signal funnel';
+  $('#card3-title').textContent = bundle ? 'Dev buy filter' : 'Thresholds';
+  $('#detail-watched-label').textContent = bundle ? 'Live candidates' : 'Watched wallets';
+  $('#detail-sources-label').textContent = bundle ? 'Bundle buys' : 'Sources';
+  $('#foot-watched').textContent = bundle ? 'launches being followed' : 'inside the active window';
+  $('#label-funding').hidden = bundle;
+  $('#tab-wallets-label').textContent = bundle ? 'Candidates' : 'Watched wallets';
+  els.funnel.hidden = bundle;
+  $('#funnel-split').hidden = bundle;
+  document.querySelector('.legend').hidden = bundle;
+  els.fingerprint.hidden = !bundle;
+
+  if (bundle) {
+    $('#metric-watched').textContent = candidates.length;
+    $('#tab-wallets-count').textContent = candidates.length;
+    $('#metric-sources').textContent = config.bundleBuys?.length ?? 0;
+    renderFingerprint(config);
+    renderCandidates(candidates, config);
+  } else {
+    renderFunnel(events, alerts);
+    renderWatches(watches);
+  }
+  renderThresholds(funding, devBuys, bundle);
   renderEvents(events);
-  renderWatches(watches);
-  renderAlerts(alerts);
+  renderAlerts(alerts, bundle);
 }
 
 function renderFunnel(events, alerts) {
@@ -210,7 +262,50 @@ function renderFunnel(events, alerts) {
   });
 }
 
-function renderThresholds(funding, devBuys) {
+function renderFingerprint(config) {
+  els.fingerprint.replaceChildren();
+  (config.bundleBuys ?? []).forEach((range, index) => {
+    const row = create('div', 'fingerprint-row');
+    const label = range.target != null
+      ? `${Number(range.target).toFixed(3)} ± ${range.tolerance}${range.toleranceMode === 'absolute' ? ' SOL' : ' %'}`
+      : `${Number(range.min).toFixed(3)} – ${Number(range.max).toFixed(3)}`;
+    row.append(
+      create('b', null, String(index + 1).padStart(2, '0')),
+      create('span', null, label),
+      create('small', null, `[${Number(range.min).toFixed(3)} , ${Number(range.max).toFixed(3)}]`)
+    );
+    els.fingerprint.append(row);
+  });
+}
+
+function renderCandidates(candidates, config) {
+  els.watched.replaceChildren();
+  els.walletsEmpty.hidden = candidates.length > 0;
+  els.walletsEmpty.textContent = 'No launch is currently being followed for this rule.';
+  const head = $('#wallets-head');
+  head.replaceChildren(
+    create('th', null, 'Token'), create('th', 'num', 'Dev buy'),
+    create('th', null, 'Progress'), create('th', 'num', 'Remaining'), create('th')
+  );
+  candidates.forEach((candidate) => {
+    const row = document.createElement('tr');
+    const token = cell();
+    const holder = create('div');
+    holder.append(
+      create('div', 't-strong', `${candidate.tokenName || 'Untitled'}${candidate.tokenSymbol ? ` · $${candidate.tokenSymbol}` : ''}`),
+      create('div', 't-mono', short(candidate.mint))
+    );
+    token.append(holder);
+    const done = candidate.buys?.length ?? 0;
+    const progress = cell('t-mono', `${done}/${candidate.expected}  ${(candidate.buys ?? []).map((buy) => buy.amount.toFixed(3)).join(' · ') || '—'}`);
+    const action = cell();
+    action.append(link('ext', 'PUMP ↗', `https://pump.fun/coin/${encodeURIComponent(candidate.mint)}`));
+    row.append(token, cell('t-amount num', sol(candidate.devBuySol)), progress, cell('t-amount num timer', remaining(candidate.expiresAt)), action);
+    els.watched.append(row);
+  });
+}
+
+function renderThresholds(funding, devBuys, bundle = false) {
   const fill = (target, ranges, unit) => {
     target.replaceChildren();
     ranges.forEach((range) => {
@@ -219,8 +314,8 @@ function renderThresholds(funding, devBuys) {
       target.append(row);
     });
   };
-  fill(els.fundingRows, funding, 'SOL in');
-  fill(els.devBuyRows, devBuys, 'SOL buy');
+  fill(els.fundingRows, bundle ? [] : funding, 'SOL in');
+  fill(els.devBuyRows, devBuys, bundle ? 'SOL dev buy' : 'SOL buy');
 }
 
 function renderEvents(events) {
@@ -252,6 +347,11 @@ function remaining(expiresAt) {
 function renderWatches(watches) {
   els.watched.replaceChildren();
   els.walletsEmpty.hidden = watches.length > 0;
+  els.walletsEmpty.textContent = 'No wallet has entered this scanner’s watch window.';
+  $('#wallets-head').replaceChildren(
+    create('th', null, 'Funded wallet'), create('th', 'num', 'Funding'),
+    create('th', null, 'Source'), create('th', 'num', 'Remaining'), create('th')
+  );
   watches.forEach((watch) => {
     const row = document.createElement('tr');
     const wallet = cell();
@@ -271,7 +371,7 @@ function renderWatches(watches) {
   });
 }
 
-function renderAlerts(alerts) {
+function renderAlerts(alerts, bundle = false) {
   els.alerts.replaceChildren();
   els.alertsEmpty.hidden = alerts.length > 0;
   alerts.slice(0, 40).forEach((alert) => {
@@ -287,7 +387,9 @@ function renderAlerts(alerts) {
     row.append(
       token,
       cell('t-amount num green', sol(alert.devBuyAmount)),
-      cell('t-amount num', sol(alert.fundingAmount)),
+      cell(bundle ? 't-mono' : 't-amount num', bundle
+        ? (alert.bundleBuys ?? []).map((value) => Number(value).toFixed(3)).join(' · ')
+        : sol(alert.fundingAmount)),
       cell('t-amount num', alert.elapsedLabel || '—'),
       delivery,
       action
@@ -309,10 +411,50 @@ function setRange(range) {
   render();
 }
 
-function clearRepeaters() { els.walletFields.replaceChildren(); els.fundingFields.replaceChildren(); els.devBuyFields.replaceChildren(); }
+function clearRepeaters() { [els.walletFields, els.fundingFields, els.devBuyFields, els.bundleFields].forEach((node) => node.replaceChildren()); }
+
+// Bundle amounts are positional, so their rows carry their rank.
+function renumber(container) {
+  [...container.querySelectorAll('.row-index')].forEach((node, index) => { node.textContent = `${index + 1}.`; });
+}
+
+function setRowMode(row, mode) {
+  row.dataset.mode = mode;
+  const live = row.querySelector(`.range-fields.${mode} input`);
+  live?.focus({ preventScroll: true });
+}
 function addWalletRow(value = '') { const row = $('#wallet-row-template').content.firstElementChild.cloneNode(true); row.querySelector('[data-wallet]').value = value; bindRemove(row); els.walletFields.append(row); }
-function addRangeRow(target, range = {}) { const row = $('#range-row-template').content.firstElementChild.cloneNode(true); row.querySelector('[data-min]').value = range.min ?? ''; row.querySelector('[data-max]').value = range.max ?? ''; bindRemove(row); target.append(row); }
-function bindRemove(row) { row.querySelector('.remove-row').addEventListener('click', () => row.remove()); }
+function addRangeRow(container, range = {}) {
+  const row = $('#range-row-template').content.firstElementChild.cloneNode(true);
+  const authored = range.target !== undefined && range.target !== null;
+  row.dataset.mode = authored || range.min === undefined ? 'target' : 'bounds';
+  row.querySelector('[data-min]').value = range.min ?? '';
+  row.querySelector('[data-max]').value = range.max ?? '';
+  row.querySelector('[data-target]').value = range.target ?? '';
+  row.querySelector('[data-tolerance]').value = range.tolerance ?? 0.5;
+  row.querySelector('[data-tolerance-mode]').value = range.toleranceMode ?? 'percent';
+  row.querySelector('.row-mode').addEventListener('click', () => setRowMode(row, row.dataset.mode === 'target' ? 'bounds' : 'target'));
+  bindRemove(row, container);
+  container.append(row);
+  renumber(container);
+}
+function bindRemove(row, container = null) { row.querySelector('.remove-row').addEventListener('click', () => { row.remove(); if (container) renumber(container); }); }
+
+// `seed` only applies when the author switches mode by hand: openModal fills the
+// sections itself, and seeding there would double every row.
+function setFormMode(mode, { seed = false } = {}) {
+  formMode = mode;
+  if (seed && mode === 'funding' && !els.devBuyFields.children.length) addRangeRow(els.devBuyFields);
+  if (seed && mode === 'bundle' && !els.bundleFields.children.length) [0, 1, 2, 3].forEach(() => addRangeRow(els.bundleFields));
+  document.querySelectorAll('#mode-picker button').forEach((button) => button.classList.toggle('is-active', button.dataset.mode === mode));
+  document.querySelectorAll('[data-for]').forEach((node) => {
+    const visible = node.dataset.for === mode;
+    node.hidden = !visible;
+    // A hidden `required` field still blocks submission, and the browser cannot
+    // report it because it cannot focus it — disable them instead.
+    node.querySelectorAll?.('input, select').forEach((field) => { field.disabled = !visible; });
+  });
+}
 
 function openModal(config = null) {
   els.form.reset(); els.formError.textContent = ''; clearRepeaters();
@@ -322,17 +464,44 @@ function openModal(config = null) {
   fields.timeWindowMinutes.value = config?.timeWindowMinutes ?? 60;
   fields.telegramChatId.value = config?.telegramChatId || '';
   fields.enabled.checked = config?.enabled ?? true;
+  setFormMode(config?.mode === 'bundle' ? 'bundle' : 'funding');
   (config?.watchAddresses?.length ? config.watchAddresses : ['']).forEach(addWalletRow);
-  configRanges(config || {}, 'fundingRanges').forEach((range) => addRangeRow(els.fundingFields, range));
-  configRanges(config || {}, 'devBuyRanges').forEach((range) => addRangeRow(els.devBuyFields, range));
+  (config?.fundingRanges?.length ? config.fundingRanges : [{}]).forEach((range) => addRangeRow(els.fundingFields, range));
+  const devBuySeed = config?.devBuyRanges?.length
+    ? config.devBuyRanges
+    : (config?.mode === 'bundle' ? [] : [{}]);
+  devBuySeed.forEach((range) => addRangeRow(els.devBuyFields, range));
+  (config?.bundleBuys?.length ? config.bundleBuys : [{}, {}, {}, {}]).forEach((range) => addRangeRow(els.bundleFields, range));
+  // Rows are added after the first call, so re-apply the enabled/disabled split.
+  setFormMode(formMode);
   els.modal.showModal(); fields.name.focus();
 }
 
 function values(selector) { return [...document.querySelectorAll(selector)].map((input) => input.value.trim()).filter(Boolean); }
-function ranges(container) { return [...container.querySelectorAll('.range-row')].map((row) => ({ min: Number(row.querySelector('[data-min]').value), max: Number(row.querySelector('[data-max]').value) })); }
+function ranges(container) {
+  return [...container.querySelectorAll('.range-row')].map((row) => {
+    if (row.dataset.mode === 'target') {
+      return {
+        target: Number(row.querySelector('[data-target]').value),
+        tolerance: Number(row.querySelector('[data-tolerance]').value || 0),
+        toleranceMode: row.querySelector('[data-tolerance-mode]').value
+      };
+    }
+    return { min: Number(row.querySelector('[data-min]').value), max: Number(row.querySelector('[data-max]').value) };
+  });
+}
 function formPayload() {
   const fields = els.form.elements;
-  return { name: fields.name.value, watchAddresses: values('[data-wallet]'), fundingRanges: ranges(els.fundingFields), devBuyRanges: ranges(els.devBuyFields), timeWindowMinutes: Number(fields.timeWindowMinutes.value), telegramChatId: fields.telegramChatId.value.trim(), enabled: fields.enabled.checked };
+  const payload = {
+    name: fields.name.value,
+    mode: formMode,
+    devBuyRanges: ranges(els.devBuyFields),
+    timeWindowMinutes: Number(fields.timeWindowMinutes.value),
+    telegramChatId: fields.telegramChatId.value.trim(),
+    enabled: fields.enabled.checked
+  };
+  if (formMode === 'bundle') return { ...payload, watchAddresses: [], bundleBuys: ranges(els.bundleFields) };
+  return { ...payload, watchAddresses: values('[data-wallet]'), fundingRanges: ranges(els.fundingFields) };
 }
 
 async function request(url, options = {}) {
@@ -353,14 +522,16 @@ $('#delete-selected').addEventListener('click', async () => {
   try { await request(`/api/configs/${config.id}`, { method: 'DELETE' }); selectedConfigId = state.configs.find((item) => item.id !== config.id)?.id || null; await refresh(); } catch (error) { alert(error.message); }
 });
 document.querySelectorAll('[data-add]').forEach((button) => button.addEventListener('click', () => {
-  if (button.dataset.add === 'wallet') addWalletRow();
-  else addRangeRow(button.dataset.add === 'funding' ? els.fundingFields : els.devBuyFields);
+  if (button.dataset.add === 'wallet') return addWalletRow();
+  const target = { funding: els.fundingFields, devbuy: els.devBuyFields, bundle: els.bundleFields }[button.dataset.add];
+  addRangeRow(target);
 }));
 els.form.addEventListener('submit', async (event) => {
   event.preventDefault(); els.formError.textContent = '';
   const id = els.form.elements.id.value || null;
   try { await saveConfig(formPayload(), id); if (!id) selectedConfigId = state.configs[0]?.id || selectedConfigId; els.modal.close(); render(); } catch (error) { els.formError.textContent = error.message; }
 });
+document.querySelectorAll('#mode-picker button').forEach((button) => button.addEventListener('click', () => setFormMode(button.dataset.mode, { seed: true })));
 $('#crumb-root').addEventListener('click', () => { view = 'overview'; render(); });
 $('#close-modal').addEventListener('click', () => els.modal.close());
 $('#cancel-modal').addEventListener('click', () => els.modal.close());
