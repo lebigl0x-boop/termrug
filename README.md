@@ -113,12 +113,13 @@ The detection pipeline needs a long-running process: it holds an open
 (Vercel, Supabase Edge Functions) cannot keep that socket open, so deploy to a
 container platform instead.
 
-1. Push this repository and create a Railway project from it. Nothing in the
-   repository configures the build: Railway's Config as Code is deprecated and
-   cannot be enabled on services created after 2026-08-28, so a `railway.json`
-   is at best ignored and at worst pins a builder that no longer exists. Set the
-   start command, the `/api/status` healthcheck and the restart policy in the
-   service settings instead.
+1. Push this repository and create a Railway project from it. The `Dockerfile`
+   describes the build, so the image does not depend on the builder guessing how
+   to install and start the app — check that the service's **Builder** setting is
+   `Dockerfile` (or left on automatic detection) rather than pinned to Nixpacks or
+   Railpack, which ignore the file. The `CMD` starts the process; the
+   `/api/status` healthcheck and the restart policy are still service settings,
+   as Railway's Config as Code cannot be enabled on recent services.
 2. Add a **PostgreSQL service** to the same project, then set
    `DATABASE_URL=${{Postgres.DATABASE_URL}}` on the FlowWatch service. Railway's
    filesystem is ephemeral, so without external storage every redeploy wipes the
