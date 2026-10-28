@@ -176,6 +176,87 @@ export function calculateBuySol(transaction, buyer, args = {}) {
   return solFromLamports(amount);
 }
 
+const RPC_API = 'https://mainnet.helius-rpc.com';
+const TRANSACTIONS_API = 'https://api.helius.xyz/v0/transactions';
+
+async function rpcCall(apiKey, method, params) {
+  const response = await fetch(`${RPC_API}/?api-key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
+  });
+  const body = await response.json();
+  if (body.error) throw new Error(body.error.message || JSON.stringify(body.error));
+  return body.result;
+}
+
+async function parseTransactions(apiKey, signatures) {
+  const response = await fetch(`${TRANSACTIONS_API}?api-key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ transactions: signatures })
+  });
+  const body = await response.json();
+  if (!Array.isArray(body)) throw new Error(body?.error || 'Unexpected transactions response.');
+  return body;
+}
+
+// A buy moves the mint to whoever paid for the transaction; a sell moves it away.
+function isBuyOf(transaction, mint) {
+  return (transaction.tokenTransfers ?? []).some(
+    (transfer) => transfer.mint === mint && transfer.toUserAccount === transaction.feePayer
+  );
+}
+
+/**
+ * Reads the buys a mint has already received, oldest first.
+ *
+ * A bundled launch puts its create and its first buys in a single slot, so they
+ * are finalised before the launch is even announced. A subscription can only
+ * ever deliver what comes after it is established, which is why those buys have
+ * to be read back from history rather than waited for.
+ */
+export async function fetchEarlyBuys({ apiKey, mint, limit = 25, maxPages = 10 }) {
+  if (!apiKey) throw new Error('HELIUS_API_KEY is not set.');
+
+  // The RPC answers newest first, so asking for `limit` would return the tail of
+  // the history. The fingerprint is positional and starts at the launch, so the
+  // pages are walked back to the very first transaction. A mint being announced
+  // right now holds a handful of them, which is one call; the cap only matters
+  // for a mint that is already busy by the time it is read.
+  const collected = [];
+  let before;
+  for (let page = 0; page < maxPages; page += 1) {
+    const options = { limit: 1000 };
+    if (before) options.before = before;
+    const batch = await rpcCall(apiKey, 'getSignaturesForAddress', [mint, options]);
+    if (!Array.isArray(batch) || !batch.length) break;
+    collected.push(...batch);
+    before = batch[batch.length - 1].signature;
+    if (batch.length < 1000) break;
+  }
+
+  const ordered = collected.filter((entry) => !entry.err).reverse().slice(0, limit);
+  if (!ordered.length) return [];
+
+  const rank = new Map(ordered.map((entry, index) => [entry.signature, index]));
+  const parsed = await parseTransactions(apiKey, ordered.map((entry) => entry.signature));
+  return parsed
+    // The parsing endpoint does not promise to answer in the order it was asked.
+    .sort((left, right) => rank.get(left.signature) - rank.get(right.signature))
+    // The creation carries the dev buy, which the rule filters on its own terms
+    // and which must not consume the first position of the fingerprint.
+    .filter((transaction) => transaction.type !== 'CREATE')
+    .filter((transaction) => isBuyOf(transaction, mint))
+    .map((transaction) => ({
+      signature: transaction.signature,
+      buyer: transaction.feePayer,
+      amount: calculateBuySol(transaction, transaction.feePayer),
+      slot: transaction.slot
+    }))
+    .filter((buy) => buy.amount !== null && buy.buyer);
+}
+
 const WEBHOOK_API = 'https://api.helius.xyz/v0/webhooks';
 export const WEBHOOK_PATH = '/webhook/helius';
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1', '0.0.0.0'];

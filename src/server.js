@@ -10,6 +10,7 @@ import {
   accountsToObject,
   calculateBuySol,
   extractInstructions,
+  fetchEarlyBuys,
   getInstructionName,
   instructionArgs,
   nativeTransfers,
@@ -51,7 +52,7 @@ function snapshot() {
     events: store.state.events,
     streamStatus,
     pumpPortalStatus,
-    candidates: activeCandidates().map(({ key, ...rest }) => rest),
+    candidates: activeCandidates().map(({ key, seen, ...rest }) => rest),
     webhookStatus,
     stats: statsCache,
     webhookUrl: `${publicUrl}/webhook/helius`,
@@ -277,12 +278,53 @@ function handleCreation(creation) {
       expected: config.bundleBuys.length,
       startedAt: now,
       expiresAt: now + bundleWindowMs(config),
-      buys: []
+      buys: [],
+      // History and the live subscription overlap, so the same buy can arrive
+      // twice; a position must only ever be filled once.
+      seen: new Set()
     });
     added += 1;
   }
-  // Following a candidate means adding its mint to the Helius filter.
-  if (added) syncStream('bundle candidate');
+  // Following a candidate means adding its mint to the Helius filter, which
+  // only ever delivers what happens next.
+  if (added) {
+    syncStream('bundle candidate');
+    replayLaunch(creation.mint).catch((error) => console.error('Launch replay failed:', error.message));
+  }
+}
+
+// A bundled launch lands its create and its first buys in one slot, so by the
+// time the launch is announced they are already final. Re-subscribing cannot
+// reach them: they have to be read back.
+const REPLAY_DELAYS = [0, 1_500, 4_000];
+
+function followsMint(mint) {
+  for (const candidate of candidates.values()) if (candidate.mint === mint) return true;
+  return false;
+}
+
+/**
+ * Feeds the buys a mint already carries through the same matcher as the live
+ * stream, oldest first. Retried briefly because the RPC can still be indexing
+ * the slot when the launch is announced, and stops as soon as no candidate is
+ * waiting on this mint — it has either completed or broken the pattern.
+ */
+async function replayLaunch(mint) {
+  for (const delay of REPLAY_DELAYS) {
+    if (!followsMint(mint)) return;
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (!followsMint(mint)) return;
+    let buys;
+    try {
+      buys = await fetchEarlyBuys({ apiKey: process.env.HELIUS_API_KEY, mint });
+    } catch (error) {
+      await event('STREAM_ERROR', { mint, message: `Launch history read failed: ${error.message}`, severity: 'error' });
+      return;
+    }
+    for (const buy of buys) {
+      await recordBundleBuy({ mint, amount: buy.amount, buyer: buy.buyer, signature: buy.signature, now: Date.now() });
+    }
+  }
 }
 
 async function recordBundleBuy({ mint, amount, buyer, signature, now }) {
@@ -291,6 +333,7 @@ async function recordBundleBuy({ mint, amount, buyer, signature, now }) {
     if (candidate.mint !== mint) continue;
     // The dev buy rides in the creation transaction and is filtered separately.
     if (signature && signature === candidate.createSignature) continue;
+    if (signature && candidate.seen.has(signature)) continue;
     if (candidate.buys.length >= candidate.expected) continue;
 
     const config = store.getConfig(candidate.configId);
@@ -303,6 +346,7 @@ async function recordBundleBuy({ mint, amount, buyer, signature, now }) {
       dropped += 1;
       continue;
     }
+    if (signature) candidate.seen.add(signature);
     candidate.buys.push({ amount, buyer, signature, at: new Date(now).toISOString() });
     if (candidate.buys.length === candidate.expected) {
       candidates.delete(candidate.key);
