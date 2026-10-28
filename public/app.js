@@ -83,6 +83,9 @@ function render() {
   els.dashboardEmpty.hidden = hasConfigs;
   els.overview.hidden = !hasConfigs || onDetail;
   els.dashboard.hidden = !onDetail;
+  // The top tabs only drive the detail panel, so they stay out of the way
+  // until a scanner is open.
+  document.body.classList.toggle('is-overview', !onDetail);
   syncLocation();
   if (onDetail) renderDashboard(config);
   else if (hasConfigs) renderOverview();

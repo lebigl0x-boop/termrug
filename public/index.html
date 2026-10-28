@@ -44,135 +44,132 @@
       <div><strong>Detection inactive — no funding event can be received.</strong><p id="webhook-banner-reason"></p></div>
     </div>
 
-    <div class="layout">
+    <main class="main">
+      <section class="void" id="dashboard-empty">
+        <div class="void-mark">◈</div>
+        <span class="kicker">Exchange flow monitor</span>
+        <h1>Build your first scanner.</h1>
+        <p>Pick the exchange wallets, add funding and dev-buy ranges, then watch the signal funnel in real time.</p>
+        <button type="button" class="btn btn-primary btn-lg" id="new-config-main">Create configuration</button>
+      </section>
 
-      <main class="main">
-        <section class="void" id="dashboard-empty">
-          <div class="void-mark">◈</div>
-          <span class="kicker">Exchange flow monitor</span>
-          <h1>Build your first scanner.</h1>
-          <p>Pick the exchange wallets, add funding and dev-buy ranges, then watch the signal funnel in real time.</p>
-          <button type="button" class="btn btn-primary btn-lg" id="new-config-main">Create configuration</button>
+      <section id="overview" hidden>
+        <section class="titlebar">
+          <div class="titlebar-copy">
+            <div class="overline"><span class="dot"></span><span id="ov-active">0 ACTIVE</span><b>·</b><span id="ov-range">All time</span></div>
+            <h1>All scanners</h1>
+          </div>
+          <div class="titlebar-actions"><button type="button" class="btn btn-primary" id="new-config-overview">Create scanner <span>+</span></button></div>
         </section>
 
-        <section id="overview" hidden>
-          <section class="titlebar">
-            <div class="titlebar-copy">
-              <div class="overline"><span class="dot"></span><span id="ov-active">0 ACTIVE</span><b>·</b><span id="ov-range">All time</span></div>
-              <h1>All scanners</h1>
-            </div>
-            <div class="titlebar-actions"><button type="button" class="btn btn-primary" id="new-config-overview">Create scanner <span>+</span></button></div>
-          </section>
-
-          <section class="totals">
-            <article class="total"><span class="stat-label">Scanners</span><strong id="ov-configs">0</strong></article>
-            <article class="total"><span class="stat-label" id="label-watched">Watched wallets</span><strong id="ov-watched">0</strong></article>
-            <article class="total"><span class="stat-label">Token launches</span><strong id="ov-launches">0</strong></article>
-            <article class="total"><span class="stat-label">Confirmed signals</span><strong class="green" id="ov-signals">0</strong></article>
-          </section>
-
-          <div class="overview-grid" id="overview-grid"></div>
+        <section class="totals">
+          <article class="total"><span class="stat-label">Scanners</span><strong id="ov-configs">0</strong></article>
+          <article class="total"><span class="stat-label" id="label-watched">Watched wallets</span><strong id="ov-watched">0</strong></article>
+          <article class="total"><span class="stat-label">Token launches</span><strong id="ov-launches">0</strong></article>
+          <article class="total"><span class="stat-label">Confirmed signals</span><strong class="green" id="ov-signals">0</strong></article>
         </section>
 
-        <div id="dashboard-content" hidden>
-          <section class="titlebar">
-            <div class="titlebar-copy">
-              <div class="overline"><span class="dot" id="selected-dot"></span><span id="selected-status">ACTIVE</span><b>·</b><span id="selected-window">60 MIN WINDOW</span></div>
-              <h1 id="selected-name">—</h1>
+        <div class="overview-grid" id="overview-grid"></div>
+      </section>
+
+      <div id="dashboard-content" hidden>
+        <section class="titlebar">
+          <div class="titlebar-copy">
+            <div class="overline"><span class="dot" id="selected-dot"></span><span id="selected-status">ACTIVE</span><b>·</b><span id="selected-window">60 MIN WINDOW</span></div>
+            <h1 id="selected-name">—</h1>
+          </div>
+          <div class="titlebar-actions">
+            <label class="switch" title="Enable or pause"><input type="checkbox" id="selected-toggle" /><span></span></label>
+            <button type="button" class="btn" id="edit-selected">Edit</button>
+            <button type="button" class="btn btn-danger" id="delete-selected">Delete</button>
+          </div>
+        </section>
+
+        <section class="cards">
+          <article class="card">
+            <header class="card-head"><h2>Observation</h2><span class="card-note" id="card-window">60 min</span></header>
+            <div class="stat">
+              <span class="stat-label" id="detail-watched-label">Watched wallets</span>
+              <strong class="stat-value" id="metric-watched">0</strong>
+              <small class="stat-foot" id="foot-watched">inside the active window</small>
             </div>
-            <div class="titlebar-actions">
-              <label class="switch" title="Enable or pause"><input type="checkbox" id="selected-toggle" /><span></span></label>
-              <button type="button" class="btn" id="edit-selected">Edit</button>
-              <button type="button" class="btn btn-danger" id="delete-selected">Delete</button>
+            <div class="divider"></div>
+            <div class="stat-row">
+              <div><span class="stat-label">Confirmed</span><strong class="stat-sub green" id="metric-alerts">0</strong></div>
+              <div><span class="stat-label" id="detail-sources-label">Sources</span><strong class="stat-sub" id="metric-sources">0</strong></div>
             </div>
-          </section>
+            <div class="chips" id="selected-wallet-chips"></div>
+          </article>
 
-          <section class="cards">
-            <article class="card">
-              <header class="card-head"><h2>Observation</h2><span class="card-note" id="card-window">60 min</span></header>
-              <div class="stat">
-                <span class="stat-label" id="detail-watched-label">Watched wallets</span>
-                <strong class="stat-value" id="metric-watched">0</strong>
-                <small class="stat-foot" id="foot-watched">inside the active window</small>
-              </div>
-              <div class="divider"></div>
-              <div class="stat-row">
-                <div><span class="stat-label">Confirmed</span><strong class="stat-sub green" id="metric-alerts">0</strong></div>
-                <div><span class="stat-label" id="detail-sources-label">Sources</span><strong class="stat-sub" id="metric-sources">0</strong></div>
-              </div>
-              <div class="chips" id="selected-wallet-chips"></div>
-            </article>
-
-            <article class="card">
-              <header class="card-head"><h2 id="card2-title">Signal funnel</h2><span class="live"><i></i>LIVE</span></header>
-              <div class="funnel" id="funnel"></div>
-              <div class="fingerprint" id="fingerprint" hidden></div>
-              <div class="divider"></div>
-              <div class="bar-split" id="funnel-split"></div>
-              <div class="legend">
-                <span><i class="sw-blue"></i>Funding</span>
-                <span><i class="sw-amber"></i>Token create</span>
-                <span><i class="sw-green"></i>Dev buy</span>
-              </div>
-            </article>
-
-            <article class="card">
-              <header class="card-head"><h2 id="card3-title">Thresholds</h2><span class="card-note">SOL</span></header>
-              <div class="thresholds">
-                <div class="threshold-group">
-                  <span class="stat-label" id="label-funding">Funding ranges <em id="metric-funding">0</em></span>
-                  <div class="range-rows" id="funding-rows"></div>
-                </div>
-                <div class="threshold-group">
-                  <span class="stat-label">Dev buy ranges <em id="metric-devbuy">0</em></span>
-                  <div class="range-rows" id="devbuy-rows"></div>
-                </div>
-              </div>
-            </article>
-          </section>
-
-          <section class="panel">
-            <div class="panel-tabs" role="tablist">
-              <button type="button" class="tab is-active" data-tab="feed" role="tab">Live feed <em id="tab-feed-count">0</em></button>
-              <button type="button" class="tab" data-tab="wallets" role="tab"><span id="tab-wallets-label">Watched wallets</span> <em id="tab-wallets-count">0</em></button>
-              <button type="button" class="tab" data-tab="alerts" role="tab">Alerts <em id="tab-alerts-count">0</em></button>
-              <span class="panel-tabs-spacer"></span>
-              <span class="card-note" id="range-note">All time</span>
+          <article class="card">
+            <header class="card-head"><h2 id="card2-title">Signal funnel</h2><span class="live"><i></i>LIVE</span></header>
+            <div class="funnel" id="funnel"></div>
+            <div class="fingerprint" id="fingerprint" hidden></div>
+            <div class="divider"></div>
+            <div class="bar-split" id="funnel-split"></div>
+            <div class="legend">
+              <span><i class="sw-blue"></i>Funding</span>
+              <span><i class="sw-amber"></i>Token create</span>
+              <span><i class="sw-green"></i>Dev buy</span>
             </div>
+          </article>
 
-            <div class="panel-body" data-panel="feed">
-              <div class="table-scroll">
-                <table class="grid">
-                  <thead><tr><th>Time</th><th>Event</th><th class="num">Amount</th><th>Wallet / mint</th><th>Detail</th><th></th></tr></thead>
-                  <tbody id="event-rows"></tbody>
-                </table>
+          <article class="card">
+            <header class="card-head"><h2 id="card3-title">Thresholds</h2><span class="card-note">SOL</span></header>
+            <div class="thresholds">
+              <div class="threshold-group">
+                <span class="stat-label" id="label-funding">Funding ranges <em id="metric-funding">0</em></span>
+                <div class="range-rows" id="funding-rows"></div>
               </div>
-              <div class="void-row" id="events-empty">No events for this scanner yet.</div>
+              <div class="threshold-group">
+                <span class="stat-label">Dev buy ranges <em id="metric-devbuy">0</em></span>
+                <div class="range-rows" id="devbuy-rows"></div>
+              </div>
             </div>
+          </article>
+        </section>
 
-            <div class="panel-body" data-panel="wallets" hidden>
-              <div class="table-scroll">
-                <table class="grid">
-                  <thead><tr id="wallets-head"><th>Funded wallet</th><th class="num">Funding</th><th>Source</th><th class="num">Remaining</th><th></th></tr></thead>
-                  <tbody id="watched-wallets"></tbody>
-                </table>
-              </div>
-              <div class="void-row" id="wallets-empty">No wallet has entered this scanner’s watch window.</div>
-            </div>
+        <section class="panel">
+          <div class="panel-tabs" role="tablist">
+            <button type="button" class="tab is-active" data-tab="feed" role="tab">Live feed <em id="tab-feed-count">0</em></button>
+            <button type="button" class="tab" data-tab="wallets" role="tab"><span id="tab-wallets-label">Watched wallets</span> <em id="tab-wallets-count">0</em></button>
+            <button type="button" class="tab" data-tab="alerts" role="tab">Alerts <em id="tab-alerts-count">0</em></button>
+            <span class="panel-tabs-spacer"></span>
+            <span class="card-note" id="range-note">All time</span>
+          </div>
 
-            <div class="panel-body" data-panel="alerts" hidden>
-              <div class="table-scroll">
-                <table class="grid">
-                  <thead><tr><th>Token</th><th class="num">Dev buy</th><th class="num">Funding</th><th class="num">Elapsed</th><th>Telegram</th><th></th></tr></thead>
-                  <tbody id="alert-list"></tbody>
-                </table>
-              </div>
-              <div class="void-row" id="alerts-empty">Confirmed dev-buy signals will appear here.</div>
+          <div class="panel-body" data-panel="feed">
+            <div class="table-scroll">
+              <table class="grid">
+                <thead><tr><th>Time</th><th>Event</th><th class="num">Amount</th><th>Wallet / mint</th><th>Detail</th><th></th></tr></thead>
+                <tbody id="event-rows"></tbody>
+              </table>
             </div>
-          </section>
-        </div>
-      </main>
-    </div>
+            <div class="void-row" id="events-empty">No events for this scanner yet.</div>
+          </div>
+
+          <div class="panel-body" data-panel="wallets" hidden>
+            <div class="table-scroll">
+              <table class="grid">
+                <thead><tr id="wallets-head"><th>Funded wallet</th><th class="num">Funding</th><th>Source</th><th class="num">Remaining</th><th></th></tr></thead>
+                <tbody id="watched-wallets"></tbody>
+              </table>
+            </div>
+            <div class="void-row" id="wallets-empty">No wallet has entered this scanner’s watch window.</div>
+          </div>
+
+          <div class="panel-body" data-panel="alerts" hidden>
+            <div class="table-scroll">
+              <table class="grid">
+                <thead><tr><th>Token</th><th class="num">Dev buy</th><th class="num">Funding</th><th class="num">Elapsed</th><th>Telegram</th><th></th></tr></thead>
+                <tbody id="alert-list"></tbody>
+              </table>
+            </div>
+            <div class="void-row" id="alerts-empty">Confirmed dev-buy signals will appear here.</div>
+          </div>
+        </section>
+      </div>
+    </main>
 
     <footer class="dock">
       <div class="dock-left">
@@ -198,8 +195,15 @@
         </header>
         <div class="modal-body">
           <input type="hidden" name="id" />
-          <label class="field">Scanner name<input name="name" required maxlength="60" placeholder="Binance 15 SOL launcher" /></label>
 
+          <section class="modal-section">
+            <div class="section-label"><b>01</b><span class="kicker">Identity</span></div>
+            <label class="field">Scanner name<input name="name" required maxlength="60" placeholder="Binance 15 SOL launcher" /></label>
+          </section>
+
+          <hr />
+
+          <div class="section-label"><b>02</b><span class="kicker">Detection rule</span></div>
           <div class="mode-picker" id="mode-picker" role="group" aria-label="Rule type">
             <button type="button" class="is-active" data-mode="funding">
               <strong>Exchange funding</strong>
@@ -244,10 +248,13 @@
             <div id="bundle-fields" class="repeater ordered"></div>
           </section>
 
+          <hr />
+
+          <div class="section-label"><b>03</b><span class="kicker">Window &amp; delivery</span></div>
           <div class="settings-row">
             <label class="field">Watch window<input name="timeWindowMinutes" type="number" min="1" step="1" required value="60" /><small data-for="funding">minutes after funding</small><small data-for="bundle">minutes to follow a launch</small></label>
             <label class="field">Telegram chat ID<input name="telegramChatId" placeholder="-100…" /><small>optional rule override</small></label>
-            <label class="toggle-field"><input name="enabled" type="checkbox" checked /><span></span><b>Scanner active</b></label>
+            <div class="field toggle-field">Status<label class="toggle-control"><input name="enabled" type="checkbox" checked /><span></span><b>Scanner active</b></label><small>pause without deleting</small></div>
           </div>
           <p class="form-error" id="form-error" role="alert"></p>
         </div>
