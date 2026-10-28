@@ -318,8 +318,12 @@ async function replayLaunch(mint) {
     try {
       buys = await fetchEarlyBuys({ apiKey: process.env.HELIUS_API_KEY, mint });
     } catch (error) {
-      await event('STREAM_ERROR', { mint, message: `Launch history read failed: ${error.message}`, severity: 'error' });
-      return;
+      // One failed read must not abandon the launch: the remaining attempts are
+      // the only other chance to see buys that are already final.
+      if (delay === REPLAY_DELAYS[REPLAY_DELAYS.length - 1]) {
+        await event('STREAM_ERROR', { mint, message: `Launch history read failed: ${error.message}`, severity: 'error' });
+      }
+      continue;
     }
     for (const buy of buys) {
       await recordBundleBuy({ mint, amount: buy.amount, buyer: buy.buyer, signature: buy.signature, now: Date.now() });

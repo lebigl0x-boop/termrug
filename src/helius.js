@@ -179,24 +179,48 @@ export function calculateBuySol(transaction, buyer, args = {}) {
 const RPC_API = 'https://mainnet.helius-rpc.com';
 const TRANSACTIONS_API = 'https://api.helius.xyz/v0/transactions';
 
+/**
+ * A bundled launch is read once, moments after it happens, and the buys it is
+ * read for are already final — so a throttled or briefly failing request is
+ * worth waiting out rather than giving up on.
+ */
+async function postJson(url, payload, attempts = 4) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** (attempt - 1)));
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+    if (response.status === 429 || response.status >= 500) {
+      lastError = new Error(`Helius answered ${response.status}.`);
+      continue;
+    }
+    const text = await response.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`Helius answered unparseable content: ${text.slice(0, 80)}`);
+    }
+  }
+  throw lastError ?? new Error('Helius request failed.');
+}
+
 async function rpcCall(apiKey, method, params) {
-  const response = await fetch(`${RPC_API}/?api-key=${encodeURIComponent(apiKey)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
-  });
-  const body = await response.json();
+  const body = await postJson(`${RPC_API}/?api-key=${encodeURIComponent(apiKey)}`, { jsonrpc: '2.0', id: 1, method, params });
   if (body.error) throw new Error(body.error.message || JSON.stringify(body.error));
   return body.result;
 }
 
 async function parseTransactions(apiKey, signatures) {
-  const response = await fetch(`${TRANSACTIONS_API}?api-key=${encodeURIComponent(apiKey)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ transactions: signatures })
-  });
-  const body = await response.json();
+  const body = await postJson(`${TRANSACTIONS_API}?api-key=${encodeURIComponent(apiKey)}`, { transactions: signatures });
   if (!Array.isArray(body)) throw new Error(body?.error || 'Unexpected transactions response.');
   return body;
 }
@@ -226,14 +250,23 @@ export async function fetchEarlyBuys({ apiKey, mint, limit = 25, maxPages = 10 }
   // for a mint that is already busy by the time it is read.
   const collected = [];
   let before;
+  let reachedLaunch = false;
   for (let page = 0; page < maxPages; page += 1) {
     const options = { limit: 1000 };
     if (before) options.before = before;
     const batch = await rpcCall(apiKey, 'getSignaturesForAddress', [mint, options]);
-    if (!Array.isArray(batch) || !batch.length) break;
+    if (!Array.isArray(batch) || !batch.length) { reachedLaunch = true; break; }
     collected.push(...batch);
     before = batch[batch.length - 1].signature;
-    if (batch.length < 1000) break;
+    // A short page is the last one, so the launch itself has been reached.
+    if (batch.length < 1000) { reachedLaunch = true; break; }
+  }
+  // Stopping on the cap means the oldest transaction in hand is not the launch.
+  // Returning it anyway would pass a slice of mid-life trading off as the
+  // opening sequence, and the fingerprint would be matched against the wrong
+  // buys — a silent wrong answer rather than a visible failure.
+  if (!reachedLaunch) {
+    throw new Error(`Mint ${mint} holds more than ${maxPages * 1000} transactions: its launch is out of reach.`);
   }
 
   const ordered = collected.filter((entry) => !entry.err).reverse().slice(0, limit);
