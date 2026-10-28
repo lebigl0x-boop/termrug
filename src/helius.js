@@ -212,7 +212,20 @@ async function webhookRequest(method, suffix, apiKey, body) {
 // sync idempotent after the stored id is lost, instead of creating a duplicate
 // that silently doubles delivery billing. Webhooks pointing anywhere else
 // (other projects on the same Helius account) are never read or touched.
-export async function syncHeliusWebhook({ apiKey, publicUrl, addresses, webhookId }) {
+export async function syncHeliusWebhook({ apiKey, publicUrl, addresses, webhookId, needed = true }) {
+  // Checked before anything else: a setup with no exchange-funding rule is not
+  // broken for lacking a webhook, whatever the key or the URL look like.
+  if (!needed) {
+    let removed = 0;
+    if (apiKey && isPubliclyReachable(publicUrl)) {
+      const webhookURL = `${publicUrl}${WEBHOOK_PATH}`;
+      const all = await webhookRequest('GET', '', apiKey);
+      const ours = (Array.isArray(all) ? all : []).filter((hook) => hook.webhookURL === webhookURL);
+      for (const hook of ours) await webhookRequest('DELETE', `/${hook.webhookID}`, apiKey);
+      removed = ours.length;
+    }
+    return { status: 'skipped', needed: false, id: null, removed, reason: 'No exchange-funding rule is enabled, so no webhook is needed.' };
+  }
   if (!apiKey) return { status: 'skipped', reason: 'HELIUS_API_KEY is missing.' };
   if (!isPubliclyReachable(publicUrl)) {
     return { status: 'skipped', reason: `PUBLIC_URL (${publicUrl}) is not reachable from the internet, so Helius cannot deliver funding transfers.` };
@@ -227,6 +240,8 @@ export async function syncHeliusWebhook({ apiKey, publicUrl, addresses, webhookI
   // would keep Helius delivering — and billing — transfers nothing can act on.
   if (!accountAddresses.length) {
     for (const hook of ours) await webhookRequest('DELETE', `/${hook.webhookID}`, apiKey);
+    // `needed` tells apart a rule that wants a webhook and cannot have one from
+    // a setup that simply does not use webhooks — bundle rules never do.
     return { status: 'skipped', id: null, removed: ours.length, reason: 'No enabled rule declares a source wallet.' };
   }
 

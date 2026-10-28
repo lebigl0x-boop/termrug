@@ -56,8 +56,12 @@ pointing anywhere else are never read, updated or deleted.
 When no enabled rule declares a source wallet, the webhook is deleted rather than
 left registered: an unused webhook keeps delivering, and keeps billing.
 
-Two conditions must hold, and both are reported in the UI event feed and in
-`webhookStatus` when they don't:
+The webhook only exists for exchange-funding rules. With none enabled the
+webhook is deleted and `webhookStatus` reports **unused** — an ordinary state,
+not a failure, since bundle rules never receive funding transfers.
+
+When a funding rule is enabled, two conditions must hold, and both are reported
+in the UI event feed and in `webhookStatus` when they don't:
 
 - `PUBLIC_URL` must be reachable from the internet. A `localhost` value skips
   registration entirely — this is the single most common reason the dashboard

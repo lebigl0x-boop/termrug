@@ -19,7 +19,7 @@ const short = (value = '') => value.length > 13 ? `${value.slice(0, 6)}…${valu
 const sol = (value) => Number.isFinite(Number(value)) ? `${Number(value).toFixed(4)}` : '—';
 const time = (value) => new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'UTC' }).format(new Date(value));
 const typeLabels = { FUNDING_MATCH: 'FUNDING', TOKEN_CREATE: 'TOKEN CREATE', DEV_BUY_MATCH: 'DEV BUY', TELEGRAM_ERROR: 'TELEGRAM', STREAM_ERROR: 'STREAM', CONFIG_CREATED: 'RULE', CONFIG_UPDATED: 'RULE', CONFIG_DELETED: 'RULE', WEBHOOK_SYNCED: 'WEBHOOK', WEBHOOK_SKIPPED: 'WEBHOOK', WEBHOOK_ERROR: 'WEBHOOK' };
-const webhookLabels = { created: 'Registered', updated: 'Registered', unchanged: 'Registered', skipped: 'Inactive', error: 'Error', pending: 'Checking' };
+const webhookLabels = { created: 'Registered', updated: 'Registered', unchanged: 'Registered', skipped: 'Inactive', unused: 'Not needed', error: 'Error', pending: 'Checking' };
 const rangeWindows = { '1h': 3_600_000, '24h': 86_400_000, '7d': 604_800_000, all: Infinity };
 const rangeNotes = { '1h': 'Last hour', '24h': 'Last 24 hours', '7d': 'Last 7 days', all: 'All time' };
 
@@ -93,22 +93,24 @@ function renderStreamStatus() {
 
 function renderWebhookStatus() {
   const hook = state.webhookStatus || {};
+  // 'unused' is not a failure: bundle rules never need the exchange webhook.
   const broken = hook.state === 'skipped' || hook.state === 'error';
   els.webhookBanner.hidden = !broken;
   if (broken) $('#webhook-banner-reason').textContent = hook.reason || 'Helius cannot deliver funding transfers.';
   const count = hook.addresses ? ` · ${hook.addresses}` : '';
   els.webhookState.textContent = `${webhookLabels[hook.state] || 'Unknown'}${broken ? '' : count}`;
-  els.webhookState.className = `pill ${broken ? 'bad' : hook.state === 'pending' ? '' : 'good'}`;
+  els.webhookState.className = `pill ${broken ? 'bad' : hook.state === 'pending' || hook.state === 'unused' ? '' : 'good'}`;
 }
 
 function renderDock() {
   const stream = state.streamStatus || {};
   const hook = state.webhookStatus || {};
-  const hookOk = hook.state && hook.state !== 'skipped' && hook.state !== 'error' && hook.state !== 'pending';
+  const hookOk = hook.state && !['skipped', 'error', 'pending'].includes(hook.state);
+  const hookUnused = hook.state === 'unused';
   $('#dock-stream').className = `dock-item ${stream.connected ? 'is-on' : stream.idle ? 'is-idle' : 'is-off'}`;
   $('#dock-stream').lastChild.textContent = `Stream ${stream.connected ? 'live' : stream.idle ? 'standby' : 'down'}`;
-  $('#dock-webhook').className = `dock-item ${hookOk ? 'is-on' : 'is-off'}`;
-  $('#dock-webhook').lastChild.textContent = `Webhook ${hookOk ? 'registered' : 'inactive'}`;
+  $('#dock-webhook').className = `dock-item ${hookUnused ? 'is-idle' : hookOk ? 'is-on' : 'is-off'}`;
+  $('#dock-webhook').lastChild.textContent = `Webhook ${hookUnused ? 'not needed' : hookOk ? 'registered' : 'inactive'}`;
   $('#dock-configs').textContent = state.configs.length;
   $('#dock-watched').textContent = state.watchedWallets.filter((watch) => new Date(watch.expiresAt).getTime() > Date.now()).length;
   $('#dock-launches').textContent = state.events.filter((event) => event.type === 'TOKEN_CREATE').length;

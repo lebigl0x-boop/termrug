@@ -414,17 +414,21 @@ async function syncWebhook(trigger) {
       apiKey: process.env.HELIUS_API_KEY,
       publicUrl,
       addresses: store.enabledWatchAddresses(),
-      webhookId: store.state.heliusWebhookId
+      webhookId: store.state.heliusWebhookId,
+      // A webhook is only expected when an exchange-funding rule is enabled.
+      needed: store.configs.some((config) => config.enabled && config.mode !== 'bundle')
     });
     if ((result.id ?? null) !== store.state.heliusWebhookId) await store.setHeliusWebhookId(result.id ?? null);
     Object.assign(webhookStatus, {
-      state: result.status,
+      state: result.status === 'skipped' && result.needed === false ? 'unused' : result.status,
       reason: result.reason ?? '',
       addresses: result.accountAddresses?.length ?? 0,
       url: result.webhookURL ?? `${publicUrl}${'/webhook/helius'}`
     });
     const dropped = result.removed ? ` (${result.removed} duplicate webhook(s) removed)` : '';
-    if (result.status === 'skipped') {
+    if (result.status === 'skipped' && result.needed === false) {
+      console.log(`Helius webhook not needed (${trigger}) — no exchange-funding rule is enabled${dropped}`);
+    } else if (result.status === 'skipped') {
       console.warn(`Helius webhook not synced (${trigger}): ${result.reason}${dropped}`);
       await event('WEBHOOK_SKIPPED', { message: `Webhook inactive — ${result.reason}${dropped}`, severity: 'error' });
     } else if (result.status !== 'unchanged' || result.removed) {
