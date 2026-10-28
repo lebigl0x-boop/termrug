@@ -214,6 +214,13 @@ body.is-overview .topnav { display: none; }
 .wallet-cell { display: inline-flex; align-items: center; gap: 8px; }
 .wallet-dot { width: 20px; height: 20px; border-radius: 50%; flex: none; background: linear-gradient(140deg, var(--indigo), var(--blue)); opacity: .85; }
 
+/* The abbreviated address and the button that copies it in full. */
+.mint-line { display: inline-flex; align-items: center; gap: 5px; }
+.mint-line a:hover { color: var(--blue); }
+.copy-btn { width: 20px; height: 20px; flex: none; border-radius: 5px; border: 1px solid transparent; color: var(--faint); font-size: 10px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: color .14s, background .14s, border-color .14s; }
+.copy-btn:hover { color: var(--text); background: var(--panel-3); border-color: var(--line); }
+.copy-btn.is-done { color: var(--green); border-color: rgba(61,220,132,.4); background: rgba(61,220,132,.1); }
+
 .void-row { padding: 36px 16px; text-align: center; color: var(--faint); font-size: 12.5px; }
 
 /* ---------- dock ---------- */

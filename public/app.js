@@ -64,6 +64,66 @@ const statsFor = (configId) => {
 const create = (tag, className, text) => { const item = document.createElement(tag); if (className) item.className = className; if (text !== undefined) item.textContent = text; return item; };
 const cell = (className, text) => create('td', className, text);
 const link = (className, text, href) => { const item = create('a', className, text); item.href = href; item.target = '_blank'; item.rel = 'noreferrer'; return item; };
+const padreUrl = (mint) => `https://trade.padre.gg/trade/solana/${encodeURIComponent(mint)}`;
+
+// The tables redraw every second, which would wipe a confirmation held on the
+// button itself. Remembering the value instead lets the next redraw show it.
+const copiedAt = new Map();
+const COPIED_MS = 1400;
+const recentlyCopied = (value) => Date.now() - (copiedAt.get(value) ?? 0) < COPIED_MS;
+
+/**
+ * Copies synchronously, inside the click that asked for it.
+ *
+ * `navigator.clipboard.writeText` can stay pending forever in some embedded
+ * browser contexts — not rejected, just never settled — which leaves a button
+ * awaiting it with no result to report. The selection path answers immediately
+ * and is only backed up by the promise when it refuses outright.
+ */
+function copyToClipboard(value) {
+  const field = create('textarea');
+  field.value = value;
+  field.setAttribute('readonly', '');
+  field.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.append(field);
+  field.select();
+  let copied = false;
+  try { copied = document.execCommand('copy'); } catch { copied = false; }
+  field.remove();
+  if (!copied) navigator.clipboard?.writeText(value).catch(() => {});
+  return copied;
+}
+
+// The address is the only thing worth taking out of a row, and it is never
+// shown in full: the button copies what the cell can only abbreviate.
+function copyButton(value, title = 'Copy address') {
+  const done = recentlyCopied(value);
+  const button = create('button', `copy-btn ${done ? 'is-done' : ''}`, done ? '✓' : '⧉');
+  button.type = 'button';
+  button.title = title;
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    // Only confirm what actually landed in the clipboard: a tick over an empty
+    // clipboard is worse than no tick at all.
+    if (!copyToClipboard(value)) {
+      button.title = 'Copy was blocked — select the address manually';
+      return;
+    }
+    copiedAt.set(value, Date.now());
+    button.classList.add('is-done');
+    button.textContent = '✓';
+    setTimeout(() => { copiedAt.delete(value); render(); }, COPIED_MS);
+  });
+  return button;
+}
+
+// Abbreviated address, opening the token on Padre, with its own copy button.
+function mintLine(mint) {
+  const holder = create('div', 'mint-line');
+  holder.append(link('t-mono', short(mint), padreUrl(mint)), copyButton(mint));
+  return holder;
+}
 
 function applySnapshot(data) {
   Object.assign(state, data);
@@ -306,13 +366,13 @@ function renderCandidates(candidates, config) {
     const holder = create('div');
     holder.append(
       create('div', 't-strong', `${candidate.tokenName || 'Untitled'}${candidate.tokenSymbol ? ` · $${candidate.tokenSymbol}` : ''}`),
-      create('div', 't-mono', short(candidate.mint))
+      mintLine(candidate.mint)
     );
     token.append(holder);
     const done = candidate.buys?.length ?? 0;
     const progress = cell('t-mono', `${done}/${candidate.expected}  ${(candidate.buys ?? []).map((buy) => buy.amount.toFixed(3)).join(' · ') || '—'}`);
     const action = cell();
-    action.append(link('ext', 'PUMP ↗', `https://pump.fun/coin/${encodeURIComponent(candidate.mint)}`));
+    action.append(link('ext', 'PADRE ↗', padreUrl(candidate.mint)));
     row.append(token, cell('t-amount num', sol(candidate.devBuySol)), progress, cell('t-amount num timer', remaining(candidate.expiresAt)), action);
     els.watched.append(row);
   });
@@ -344,12 +404,18 @@ function renderEvents(events) {
       cell('t-time', time(event.at)),
       tag,
       cell('t-amount num', event.amount === undefined ? '—' : sol(event.amount)),
-      cell('t-mono', short(event.mint || event.wallet || '—')),
+      event.mint ? eventMintCell(event.mint) : cell('t-mono', short(event.wallet || '—')),
       cell('t-detail', event.message || '—'),
       action
     );
     els.eventRows.append(row);
   });
+}
+
+function eventMintCell(mint) {
+  const holder = cell();
+  holder.append(mintLine(mint));
+  return holder;
 }
 
 function remaining(expiresAt) {
@@ -391,12 +457,12 @@ function renderAlerts(alerts, bundle = false) {
     const row = document.createElement('tr');
     const token = cell();
     const holder = create('div');
-    holder.append(create('div', 't-strong', `${alert.tokenName || 'Untitled token'}${alert.tokenSymbol ? ` · $${alert.tokenSymbol}` : ''}`), create('div', 't-mono', short(alert.mint)));
+    holder.append(create('div', 't-strong', `${alert.tokenName || 'Untitled token'}${alert.tokenSymbol ? ` · $${alert.tokenSymbol}` : ''}`), mintLine(alert.mint));
     token.append(holder);
     const delivery = cell();
     delivery.append(create('span', `tag ${alert.telegram === 'sent' ? 'success' : alert.telegram === 'failed' ? 'error' : ''}`, `TG ${(alert.telegram || 'pending').toUpperCase()}`));
     const action = cell();
-    action.append(link('ext', 'PUMP ↗', `https://pump.fun/coin/${encodeURIComponent(alert.mint)}`));
+    action.append(link('ext', 'PADRE ↗', padreUrl(alert.mint)));
     row.append(
       token,
       cell('t-amount num green', sol(alert.devBuyAmount)),
