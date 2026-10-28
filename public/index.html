@@ -265,10 +265,10 @@
       <div class="repeat-row range-row" data-mode="target">
         <span class="row-index"></span>
         <div class="range-fields bounds">
-          <input data-min type="number" min="0" step="0.000001" placeholder="Min" /><span class="to">to</span><input data-max type="number" min="0" step="0.000001" placeholder="Max" />
+          <input data-min type="number" min="0" step="any" placeholder="Min" /><span class="to">to</span><input data-max type="number" min="0" step="any" placeholder="Max" />
         </div>
         <div class="range-fields target">
-          <input data-target type="number" min="0" step="0.000001" placeholder="Target" /><span class="to">±</span><input data-tolerance type="number" min="0" step="0.01" placeholder="0.5" />
+          <input data-target type="number" min="0" step="any" placeholder="Target" /><span class="to">±</span><input data-tolerance type="number" min="0" step="any" placeholder="0.5" />
           <select data-tolerance-mode><option value="percent">%</option><option value="absolute">SOL</option></select>
         </div>
         <button type="button" class="row-mode" title="Switch between bounds and target ± tolerance">⇄</button>

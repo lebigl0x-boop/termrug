@@ -17,6 +17,14 @@ function syncLocation() {
 const $ = (selector) => document.querySelector(selector);
 const short = (value = '') => value.length > 13 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value;
 const sol = (value) => Number.isFinite(Number(value)) ? `${Number(value).toFixed(4)}` : '—';
+// Dev buys sit around 0.03 SOL while bundle amounts sit around 18: a fixed
+// precision either rounds the small ones to nothing or clutters the large ones.
+const amount = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  const decimals = Math.abs(number) >= 10 ? 2 : Math.abs(number) >= 1 ? 3 : 5;
+  return number.toFixed(decimals);
+};
 const time = (value) => new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'UTC' }).format(new Date(value));
 const typeLabels = { FUNDING_MATCH: 'FUNDING', TOKEN_CREATE: 'TOKEN CREATE', DEV_BUY_MATCH: 'DEV BUY', TELEGRAM_ERROR: 'TELEGRAM', STREAM_ERROR: 'STREAM', CONFIG_CREATED: 'RULE', CONFIG_UPDATED: 'RULE', CONFIG_DELETED: 'RULE', WEBHOOK_SYNCED: 'WEBHOOK', WEBHOOK_SKIPPED: 'WEBHOOK', WEBHOOK_ERROR: 'WEBHOOK' };
 const webhookLabels = { created: 'Registered', updated: 'Registered', unchanged: 'Registered', skipped: 'Inactive', unused: 'Not needed', error: 'Error', pending: 'Checking' };
@@ -164,7 +172,7 @@ function renderOverview() {
     rows.forEach(([label, list]) => {
       const row = create('div', 'ov-range');
       const text = list.length
-        ? list.map((range) => Number(range.target ?? range.min).toFixed(range.target != null ? 3 : 2)).join('  ·  ')
+        ? list.map((range) => amount(range.target ?? range.min)).join('  ·  ')
         : 'any';
       row.append(create('span', null, label), create('span', null, text));
       ranges.append(row);
@@ -269,8 +277,8 @@ function renderFingerprint(config) {
   (config.bundleBuys ?? []).forEach((range, index) => {
     const row = create('div', 'fingerprint-row');
     const label = range.target != null
-      ? `${Number(range.target).toFixed(3)} ± ${range.tolerance}${range.toleranceMode === 'absolute' ? ' SOL' : ' %'}`
-      : `${Number(range.min).toFixed(3)} – ${Number(range.max).toFixed(3)}`;
+      ? `${amount(range.target)} ± ${range.tolerance}${range.toleranceMode === 'absolute' ? ' SOL' : ' %'}`
+      : `${amount(range.min)} – ${amount(range.max)}`;
     row.append(
       create('b', null, String(index + 1).padStart(2, '0')),
       create('span', null, label),
@@ -312,7 +320,7 @@ function renderThresholds(funding, devBuys, bundle = false) {
     target.replaceChildren();
     ranges.forEach((range) => {
       const row = create('div', 'range-pill');
-      row.append(create('span', null, `${Number(range.min).toFixed(2)} – ${Number(range.max).toFixed(2)}`), create('small', null, unit));
+      row.append(create('span', null, `${amount(range.min)} – ${amount(range.max)}`), create('small', null, unit));
       target.append(row);
     });
   };
@@ -420,8 +428,18 @@ function renumber(container) {
   [...container.querySelectorAll('.row-index')].forEach((node, index) => { node.textContent = `${index + 1}.`; });
 }
 
+// Only the half of the row the author is using may validate: the other half
+// still holds values, and a hidden invalid field blocks submission silently.
+function applyRowMode(row, sectionEnabled = true) {
+  row.querySelectorAll('.range-fields').forEach((group) => {
+    const active = group.classList.contains(row.dataset.mode);
+    group.querySelectorAll('input, select').forEach((field) => { field.disabled = !sectionEnabled || !active; });
+  });
+}
+
 function setRowMode(row, mode) {
   row.dataset.mode = mode;
+  applyRowMode(row);
   const live = row.querySelector(`.range-fields.${mode} input`);
   live?.focus({ preventScroll: true });
 }
@@ -438,6 +456,7 @@ function addRangeRow(container, range = {}) {
   row.querySelector('.row-mode').addEventListener('click', () => setRowMode(row, row.dataset.mode === 'target' ? 'bounds' : 'target'));
   bindRemove(row, container);
   container.append(row);
+  applyRowMode(row, !container.closest('[data-for]')?.hidden);
   renumber(container);
 }
 function bindRemove(row, container = null) { row.querySelector('.remove-row').addEventListener('click', () => { row.remove(); if (container) renumber(container); }); }
@@ -455,6 +474,9 @@ function setFormMode(mode, { seed = false } = {}) {
     // A hidden `required` field still blocks submission, and the browser cannot
     // report it because it cannot focus it — disable them instead.
     node.querySelectorAll?.('input, select').forEach((field) => { field.disabled = !visible; });
+    // Re-apply per-row modes: the blanket pass above would otherwise enable the
+    // inactive half of every range row inside a section it just revealed.
+    node.querySelectorAll?.('.range-row').forEach((row) => applyRowMode(row, visible));
   });
 }
 
