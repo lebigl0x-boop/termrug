@@ -15,49 +15,93 @@ function number(value, field, { min = 0, strictPositive = false } = {}) {
   return parsed;
 }
 
+/**
+ * A range is authored either as explicit bounds, or as a target with a
+ * tolerance — the form that matters in practice, because the amounts being
+ * matched are never round. Writing 0.029 to 0.029 demands an exact lamport hit
+ * and effectively never fires; 0.029 ± 2% does what the author meant. Both
+ * shapes normalise to the min/max the matcher already works in, and the
+ * authored fields are kept so the UI can show them back.
+ */
+function resolveBounds(range, label, index) {
+  const authored = range?.target ?? null;
+  if (authored === null || authored === '') {
+    const min = number(range?.min, `${label}[${index}].min`);
+    const max = number(range?.max, `${label}[${index}].max`);
+    return { min, max };
+  }
+  const target = number(authored, `${label}[${index}].target`);
+  const toleranceMode = range.toleranceMode === 'absolute' ? 'absolute' : 'percent';
+  const tolerance = number(range.tolerance ?? 0, `${label}[${index}].tolerance`);
+  const spread = toleranceMode === 'percent' ? target * tolerance / 100 : tolerance;
+  return {
+    min: Math.max(0, target - spread),
+    max: target + spread,
+    target,
+    tolerance,
+    toleranceMode
+  };
+}
+
 function normaliseRanges(values, label, fallbackMin, fallbackMax) {
   const source = Array.isArray(values) && values.length ? values : [{ min: fallbackMin, max: fallbackMax }];
   return source.map((range, index) => {
-    const min = number(range?.min, `${label}[${index}].min`);
-    const max = number(range?.max, `${label}[${index}].max`);
-    if (min > max) throw new Error(`${label} range ${index + 1}: min cannot exceed max.`);
-    return { id: String(range?.id || randomUUID()), min, max };
+    const bounds = resolveBounds(range, label, index);
+    if (bounds.min > bounds.max) throw new Error(`${label} range ${index + 1}: min cannot exceed max.`);
+    return { id: String(range?.id || randomUUID()), ...bounds };
   });
 }
 
+export const RULE_MODES = ['funding', 'bundle'];
+
 export function normaliseConfig(input = {}, existing = {}) {
   const name = String(input.name ?? existing.name ?? '').trim();
+  // Rules written before bundle detection existed carry no mode.
+  const mode = RULE_MODES.includes(input.mode ?? existing.mode) ? (input.mode ?? existing.mode) : 'funding';
   const watchAddresses = Array.isArray(input.watchAddresses ?? existing.watchAddresses)
     ? [...new Set((input.watchAddresses ?? existing.watchAddresses).map((address) => String(address).trim()).filter(Boolean))]
     : [];
-  const fundingRanges = normaliseRanges(
-    input.fundingRanges ?? existing.fundingRanges,
-    'fundingRanges',
-    input.minSol ?? existing.minSol,
-    input.maxSol ?? existing.maxSol
-  );
-  const devBuyRanges = normaliseRanges(
-    input.devBuyRanges ?? existing.devBuyRanges,
-    'devBuyRanges',
-    input.minDevBuy ?? existing.minDevBuy,
-    input.maxDevBuy ?? existing.maxDevBuy
-  );
+  // A bundle rule has no exchange leg, so funding ranges are meaningless there;
+  // its dev buy range is an optional pre-filter rather than the alert condition.
+  const optional = (values, label, fallbackMin, fallbackMax) => {
+    const provided = Array.isArray(values) && values.length;
+    if (!provided && (fallbackMin === undefined || fallbackMin === null)) return [];
+    return normaliseRanges(values, label, fallbackMin, fallbackMax);
+  };
+  const fundingRanges = mode === 'bundle'
+    ? optional(input.fundingRanges ?? existing.fundingRanges, 'fundingRanges', input.minSol ?? existing.minSol, input.maxSol ?? existing.maxSol)
+    : normaliseRanges(input.fundingRanges ?? existing.fundingRanges, 'fundingRanges', input.minSol ?? existing.minSol, input.maxSol ?? existing.maxSol);
+  const devBuyRanges = mode === 'bundle'
+    ? optional(input.devBuyRanges ?? existing.devBuyRanges, 'devBuyRanges', input.minDevBuy ?? existing.minDevBuy, input.maxDevBuy ?? existing.maxDevBuy)
+    : normaliseRanges(input.devBuyRanges ?? existing.devBuyRanges, 'devBuyRanges', input.minDevBuy ?? existing.minDevBuy, input.maxDevBuy ?? existing.maxDevBuy);
   const timeWindowMinutes = number(input.timeWindowMinutes ?? existing.timeWindowMinutes, 'timeWindowMinutes', { min: 0, strictPositive: true });
+  // Ordered: the nth entry is matched against the nth buy that follows the launch.
+  const bundleSource = input.bundleBuys ?? existing.bundleBuys ?? [];
+  const bundleBuys = Array.isArray(bundleSource) && bundleSource.length
+    ? normaliseRanges(bundleSource, 'bundleBuys')
+    : [];
 
   if (!name) throw new Error('A config name is required.');
-  if (!watchAddresses.length) throw new Error('Add at least one exchange wallet address.');
+  if (mode === 'funding' && !watchAddresses.length) {
+    throw new Error('Add at least one exchange wallet address.');
+  }
+  if (mode === 'bundle' && !bundleBuys.length) {
+    throw new Error('A bundle rule needs at least one bundle buy amount.');
+  }
 
   return {
     id: existing.id ?? randomUUID(),
     name,
+    mode,
     watchAddresses,
+    bundleBuys,
     fundingRanges,
     devBuyRanges,
     // Kept for backward compatibility with existing JSON and third-party clients.
-    minSol: fundingRanges[0].min,
-    maxSol: fundingRanges[0].max,
-    minDevBuy: devBuyRanges[0].min,
-    maxDevBuy: devBuyRanges[0].max,
+    minSol: fundingRanges[0]?.min ?? null,
+    maxSol: fundingRanges[0]?.max ?? null,
+    minDevBuy: devBuyRanges[0]?.min ?? null,
+    maxDevBuy: devBuyRanges[0]?.max ?? null,
     timeWindowMinutes,
     telegramChatId: String(input.telegramChatId ?? existing.telegramChatId ?? '').trim(),
     enabled: Boolean(input.enabled ?? existing.enabled ?? true),
@@ -123,11 +167,19 @@ export class ConfigStore {
   }
 
   activeConfigsForAddress(address) {
-    return this.configs.filter((config) => config.enabled && config.watchAddresses.includes(address));
+    return this.configs.filter((config) => config.enabled && config.mode !== 'bundle' && config.watchAddresses.includes(address));
   }
 
+  // Bundle rules watch pump.fun launches, not exchange wallets: they must not
+  // put an address into the Helius webhook, which bills per delivery.
   enabledWatchAddresses() {
-    return [...new Set(this.configs.filter((config) => config.enabled).flatMap((config) => config.watchAddresses))];
+    return [...new Set(this.configs
+      .filter((config) => config.enabled && config.mode !== 'bundle')
+      .flatMap((config) => config.watchAddresses))];
+  }
+
+  enabledBundleConfigs() {
+    return this.configs.filter((config) => config.enabled && config.mode === 'bundle');
   }
 
   async setHeliusWebhookId(id) {

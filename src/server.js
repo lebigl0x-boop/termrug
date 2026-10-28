@@ -18,6 +18,7 @@ import {
   transactionSignature,
   transactionTimestamp
 } from './helius.js';
+import { PumpPortalStream } from './pumpPortal.js';
 import { sendTelegramAlert } from './telegram.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -28,6 +29,10 @@ const store = new ConfigStore();
 const streamStatus = { connected: false, configured: Boolean(process.env.HELIUS_API_KEY), label: 'Standby', idle: true };
 const webhookStatus = { state: 'pending', reason: '', addresses: 0, url: '' };
 let statsCache = {};
+const pumpPortalStatus = { connected: false, configured: true, label: 'Standby', idle: true };
+// Candidate launches being followed for a bundle fingerprint, keyed configId:mint.
+// Short-lived by design — a few minutes each — so they stay out of storage.
+const candidates = new Map();
 
 const storageLabel = await store.init();
 
@@ -45,6 +50,8 @@ function snapshot() {
     alerts: store.state.alerts,
     events: store.state.events,
     streamStatus,
+    pumpPortalStatus,
+    candidates: activeCandidates().map(({ key, ...rest }) => rest),
     webhookStatus,
     stats: statsCache,
     webhookUrl: `${publicUrl}/webhook/helius`,
@@ -174,8 +181,9 @@ async function processParsedTransaction(transaction) {
       if (!buyer || !mint) continue;
       const amount = calculateBuySol(transaction, buyer, args);
       if (amount === null) continue;
+      await recordBundleBuy({ mint, amount, buyer, signature, now });
 
-      for (const config of store.configs.filter((item) => item.enabled && matchesAnyRange(amount, item.devBuyRanges, item.minDevBuy, item.maxDevBuy))) {
+      for (const config of store.configs.filter((item) => item.enabled && item.mode !== 'bundle' && matchesAnyRange(amount, item.devBuyRanges, item.minDevBuy, item.maxDevBuy))) {
         const watch = store.getActiveWatch(config.id, buyer, now);
         const launch = store.getLaunch(config.id, buyer, mint, now);
         if (!watch || !launch) continue;
@@ -238,6 +246,128 @@ async function processParsedTransaction(transaction) {
  * watch. Since watch windows are rare and short, the subscription is opened only
  * while at least one is open, which is where nearly all the credit spend went.
  */
+function bundleWindowMs(config) {
+  return Math.max(1, config.timeWindowMinutes) * 60_000;
+}
+
+/**
+ * A pump.fun launch enters the funnel when its dev buy matches the rule. From
+ * there the rule is an ordered fingerprint: the nth buy after the launch must
+ * land inside the nth window. A single position missing its window kills the
+ * candidate immediately — there is no point following a launch that already
+ * broke the pattern.
+ */
+function handleCreation(creation) {
+  const now = Date.now();
+  let added = 0;
+  for (const config of store.enabledBundleConfigs()) {
+    if (config.devBuyRanges.length && !matchesAnyRange(creation.devBuySol, config.devBuyRanges)) continue;
+    const key = `${config.id}:${creation.mint}`;
+    if (candidates.has(key)) continue;
+    candidates.set(key, {
+      key,
+      configId: config.id,
+      configName: config.name,
+      mint: creation.mint,
+      creator: creation.creator,
+      devBuySol: creation.devBuySol,
+      tokenName: creation.name,
+      tokenSymbol: creation.symbol,
+      createSignature: creation.signature,
+      expected: config.bundleBuys.length,
+      startedAt: now,
+      expiresAt: now + bundleWindowMs(config),
+      buys: []
+    });
+    added += 1;
+  }
+  // Following a candidate means adding its mint to the Helius filter.
+  if (added) syncStream('bundle candidate');
+}
+
+async function recordBundleBuy({ mint, amount, buyer, signature, now }) {
+  let dropped = 0;
+  for (const candidate of [...candidates.values()]) {
+    if (candidate.mint !== mint) continue;
+    // The dev buy rides in the creation transaction and is filtered separately.
+    if (signature && signature === candidate.createSignature) continue;
+    if (candidate.buys.length >= candidate.expected) continue;
+
+    const config = store.getConfig(candidate.configId);
+    if (!config || !config.enabled) { candidates.delete(candidate.key); dropped += 1; continue; }
+
+    const position = candidate.buys.length;
+    const window = config.bundleBuys[position];
+    if (!inRange(amount, window.min, window.max)) {
+      candidates.delete(candidate.key);
+      dropped += 1;
+      continue;
+    }
+    candidate.buys.push({ amount, buyer, signature, at: new Date(now).toISOString() });
+    if (candidate.buys.length === candidate.expected) {
+      candidates.delete(candidate.key);
+      dropped += 1;
+      await raiseBundleAlert(config, candidate, now);
+    }
+  }
+  if (dropped) syncStream('bundle resolved');
+}
+
+async function raiseBundleAlert(config, candidate, now) {
+  const elapsedMs = Math.max(0, now - candidate.startedAt);
+  const amounts = candidate.buys.map((buy) => buy.amount);
+  const alert = await store.addAlert({
+    configId: config.id,
+    configName: config.name,
+    mode: 'bundle',
+    wallet: candidate.creator,
+    mint: candidate.mint,
+    tokenName: candidate.tokenName,
+    tokenSymbol: candidate.tokenSymbol,
+    devBuyAmount: candidate.devBuySol,
+    bundleBuys: amounts,
+    bundleWallets: candidate.buys.map((buy) => buy.buyer),
+    buySignature: candidate.buys[candidate.buys.length - 1]?.signature ?? '',
+    fundingSignature: candidate.createSignature,
+    elapsedMs,
+    elapsedLabel: `${Math.floor(elapsedMs / 60_000)}m ${Math.floor((elapsedMs % 60_000) / 1_000)}s`,
+    telegram: 'pending'
+  });
+
+  try {
+    const chatId = config.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+    const result = await sendTelegramAlert({ token: process.env.TELEGRAM_BOT_TOKEN, chatId, alert });
+    alert.telegram = result.skipped ? 'skipped' : 'sent';
+  } catch (error) {
+    alert.telegram = 'failed';
+    alert.telegramError = error.message;
+    await event('TELEGRAM_ERROR', { configId: config.id, configName: config.name, mint: candidate.mint, message: `Telegram delivery failed: ${error.message}`, severity: 'error' });
+  }
+
+  await event('BUNDLE_MATCH', {
+    configId: config.id,
+    configName: config.name,
+    mint: candidate.mint,
+    wallet: candidate.creator,
+    amount: amounts.reduce((sum, value) => sum + value, 0),
+    signature: alert.buySignature,
+    message: `${candidate.tokenSymbol || compact(candidate.mint)} bundle matched — ${amounts.map((value) => value.toFixed(3)).join(' · ')} SOL`,
+    severity: 'success'
+  });
+}
+
+function activeCandidates(now = Date.now()) {
+  return [...candidates.values()].filter((candidate) => candidate.expiresAt > now);
+}
+
+function pruneCandidates(now = Date.now()) {
+  let removed = 0;
+  for (const [key, candidate] of candidates) {
+    if (candidate.expiresAt <= now) { candidates.delete(key); removed += 1; }
+  }
+  return removed;
+}
+
 // Watches belonging to a paused rule are dead weight: they would keep the
 // subscription open for launches no alert could ever come from.
 function activeWatchWallets(now = Date.now()) {
@@ -247,8 +377,14 @@ function activeWatchWallets(now = Date.now()) {
     .map((watch) => watch.wallet))];
 }
 
+// Both legs ride the same subscription: funded wallets for the exchange chain,
+// candidate mints for bundle fingerprints.
+function activeStreamAccounts(now = Date.now()) {
+  return [...new Set([...activeWatchWallets(now), ...activeCandidates(now).map((candidate) => candidate.mint)])];
+}
+
 function syncStream(reason) {
-  const wallets = activeWatchWallets();
+  const wallets = activeStreamAccounts();
   if (!wallets.length) {
     if (!helius.running) return;
     console.log(`Parsed Stream closing (${reason}) — no wallet under watch`);
@@ -257,7 +393,7 @@ function syncStream(reason) {
     return;
   }
   if (!helius.applyAccounts(wallets)) return;
-  console.log(`Parsed Stream subscribed (${reason}) — filtering on ${wallets.length} wallet(s)`);
+  console.log(`Parsed Stream subscribed (${reason}) — filtering on ${wallets.length} account(s)`);
   broadcast();
 }
 
@@ -312,6 +448,7 @@ app.post('/api/configs', async (request, response, next) => {
     await event('CONFIG_CREATED', { configId: config.id, configName: config.name, message: `Config “${config.name}” created`, severity: 'info' });
     await refreshStats();
     await syncWebhook('config created');
+    syncPumpPortal('config created');
     response.status(201).json(config);
   } catch (error) { next(error); }
 });
@@ -324,6 +461,7 @@ app.put('/api/configs/:id', async (request, response, next) => {
     await refreshStats();
     await syncWebhook('config updated');
     syncStream('config updated');
+    syncPumpPortal('config updated');
     response.json(config);
   } catch (error) { next(error); }
 });
@@ -336,6 +474,7 @@ app.delete('/api/configs/:id', async (request, response, next) => {
     await refreshStats();
     await syncWebhook('config deleted');
     syncStream('config deleted');
+    syncPumpPortal('config deleted');
     response.status(204).end();
   } catch (error) { next(error); }
 });
@@ -357,6 +496,30 @@ app.use((error, _request, response, _next) => {
 
 wss.on('connection', (socket) => socket.send(JSON.stringify(snapshot())));
 
+const pumpPortal = new PumpPortalStream({
+  url: process.env.PUMPPORTAL_URL,
+  apiKey: process.env.PUMPPORTAL_API_KEY,
+  onCreation: (creation) => {
+    try { handleCreation(creation); } catch (error) { console.error('Creation handling failed:', error.message); }
+  },
+  onStatus: (status) => { Object.assign(pumpPortalStatus, status); broadcast(); },
+  onError: (error) => console.error('PumpPortal:', error.message)
+});
+
+function syncPumpPortal(reason) {
+  const needed = store.enabledBundleConfigs().length > 0;
+  if (needed === pumpPortal.running) return;
+  if (needed) {
+    console.log(`PumpPortal opening (${reason})`);
+    pumpPortal.start();
+  } else {
+    console.log(`PumpPortal closing (${reason}) — no bundle rule enabled`);
+    candidates.clear();
+    pumpPortal.stop('Standby');
+  }
+  broadcast();
+}
+
 const helius = new HeliusParsedStream({
   apiKey: process.env.HELIUS_API_KEY,
   url: process.env.PARSED_STREAM_URL,
@@ -365,9 +528,10 @@ const helius = new HeliusParsedStream({
   onError: (error) => event('STREAM_ERROR', { message: `Parsed Stream: ${error.message}`, severity: 'error' }).catch(console.error)
 });
 
-setInterval(() => store.cleanup().then(() => { syncStream('cleanup'); broadcast(); }).catch(console.error), 30_000).unref();
+setInterval(() => store.cleanup().then(() => { if (pruneCandidates()) syncStream('candidate expiry'); syncStream('cleanup'); broadcast(); }).catch(console.error), 30_000).unref();
 setInterval(() => refreshStats().then(() => broadcast()).catch(console.error), 15_000).unref();
 syncStream('startup');
+syncPumpPortal('startup');
 
 server.listen(port, () => {
   console.log(`Solana Exchange Scanner listening on ${publicUrl}`);
@@ -379,6 +543,7 @@ server.listen(port, () => {
 
 function shutdown() {
   helius.stop();
+  pumpPortal.stop();
   for (const client of wss.clients) client.terminate();
   wss.close();
   server.close(() => process.exit(0));

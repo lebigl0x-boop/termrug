@@ -6,7 +6,32 @@ const escapeHtml = (value) => String(value ?? '')
 
 const short = (address) => `${address.slice(0, 6)}…${address.slice(-6)}`;
 
+function buildBundleMessage(alert) {
+  const mintUrl = `https://solscan.io/token/${encodeURIComponent(alert.mint)}`;
+  const pumpUrl = `https://pump.fun/coin/${encodeURIComponent(alert.mint)}`;
+  const creatorUrl = `https://solscan.io/account/${encodeURIComponent(alert.wallet)}`;
+  const amounts = (alert.bundleBuys ?? []).map((value, index) => `  ${index + 1}. ${Number(value).toFixed(3)} SOL`);
+  const total = (alert.bundleBuys ?? []).reduce((sum, value) => sum + Number(value), 0);
+
+  return [
+    '🎯 <b>PUMP.FUN BUNDLE MATCH</b>',
+    '',
+    `<b>Rule</b>  ${escapeHtml(alert.configName)}`,
+    `<b>Token</b>  ${escapeHtml(alert.tokenName || 'Unknown')} ${alert.tokenSymbol ? `(${escapeHtml(alert.tokenSymbol)})` : ''}`.trim(),
+    `<b>Mint</b>  <a href="${mintUrl}">${escapeHtml(short(alert.mint))}</a>`,
+    `<b>Creator</b>  <a href="${creatorUrl}">${escapeHtml(short(alert.wallet))}</a>`,
+    '',
+    `<b>Dev buy</b>  ${Number(alert.devBuyAmount).toFixed(4)} SOL`,
+    `<b>Bundle buys</b>  ${total.toFixed(3)} SOL total`,
+    ...amounts,
+    `<b>Elapsed</b>  ${escapeHtml(alert.elapsedLabel)}`,
+    '',
+    `<a href="${pumpUrl}">Open pump.fun</a>  ·  <a href="${mintUrl}">Open Solscan</a>`
+  ].join('\n');
+}
+
 export function buildAlertMessage(alert) {
+  if (alert.mode === 'bundle') return buildBundleMessage(alert);
   const fundingUrl = `https://solscan.io/tx/${encodeURIComponent(alert.fundingSignature)}`;
   const walletUrl = `https://solscan.io/account/${encodeURIComponent(alert.wallet)}`;
   const mintUrl = `https://solscan.io/token/${encodeURIComponent(alert.mint)}`;
