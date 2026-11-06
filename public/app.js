@@ -1,4 +1,4 @@
-const state = { configs: [], watchedWallets: [], alerts: [], events: [], candidates: [], streamStatus: {}, webhookStatus: {}, stats: {}, webhookUrl: '' };
+const state = { configs: [], watchedWallets: [], alerts: [], events: [], candidates: [], positions: [], streamStatus: {}, webhookStatus: {}, tradeStatus: {}, stats: {}, webhookUrl: '' };
 let selectedConfigId = null;
 let activeTab = 'feed';
 let view = 'overview';
@@ -25,8 +25,16 @@ const amount = (value) => {
   const decimals = Math.abs(number) >= 10 ? 2 : Math.abs(number) >= 1 ? 3 : 5;
   return number.toFixed(decimals);
 };
+// A freshly launched token trades at ~1e-8 SOL, where fixed decimals collapse
+// to zero; a settled one can be orders of magnitude above that.
+const price = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number === 0) return '—';
+  return Math.abs(number) < 0.001 ? number.toExponential(2) : number.toFixed(6);
+};
+const percent = (value) => `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(1)}%`;
 const time = (value) => new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'UTC' }).format(new Date(value));
-const typeLabels = { FUNDING_MATCH: 'FUNDING', TOKEN_CREATE: 'TOKEN CREATE', DEV_BUY_MATCH: 'DEV BUY', TELEGRAM_ERROR: 'TELEGRAM', STREAM_ERROR: 'STREAM', CONFIG_CREATED: 'RULE', CONFIG_UPDATED: 'RULE', CONFIG_DELETED: 'RULE', WEBHOOK_SYNCED: 'WEBHOOK', WEBHOOK_SKIPPED: 'WEBHOOK', WEBHOOK_ERROR: 'WEBHOOK' };
+const typeLabels = { FUNDING_MATCH: 'FUNDING', TOKEN_CREATE: 'TOKEN CREATE', DEV_BUY_MATCH: 'DEV BUY', BUNDLE_MATCH: 'BUNDLE', WALLET_BUY_MATCH: 'WALLET BUY', AUTO_BUY_FILLED: 'AUTO BUY', AUTO_BUY_FAILED: 'AUTO BUY', AUTO_BUY_SKIPPED: 'AUTO BUY', AUTO_SELL_FILLED: 'AUTO SELL', AUTO_SELL_FAILED: 'AUTO SELL', TELEGRAM_ERROR: 'TELEGRAM', STREAM_ERROR: 'STREAM', CONFIG_CREATED: 'RULE', CONFIG_UPDATED: 'RULE', CONFIG_DELETED: 'RULE', WEBHOOK_SYNCED: 'WEBHOOK', WEBHOOK_SKIPPED: 'WEBHOOK', WEBHOOK_ERROR: 'WEBHOOK' };
 const webhookLabels = { created: 'Registered', updated: 'Registered', unchanged: 'Registered', skipped: 'Inactive', unused: 'Not needed', error: 'Error', pending: 'Checking' };
 const rangeWindows = { '1h': 3_600_000, '24h': 86_400_000, '7d': 604_800_000, all: Infinity };
 const rangeNotes = { '1h': 'Last hour', '24h': 'Last 24 hours', '7d': 'Last 7 days', all: 'All time' };
@@ -38,14 +46,20 @@ const els = {
   walletFields: $('#wallet-fields'), fundingFields: $('#funding-fields'), devBuyFields: $('#devbuy-fields'), bundleFields: $('#bundle-fields'),
   webhookBanner: $('#webhook-banner'), webhookState: $('#webhook-state'), funnel: $('#funnel'), funnelSplit: $('#funnel-split'),
   fundingRows: $('#funding-rows'), devBuyRows: $('#devbuy-rows'), fingerprint: $('#fingerprint'),
-  overview: $('#overview'), overviewGrid: $('#overview-grid')
+  overview: $('#overview'), overviewGrid: $('#overview-grid'),
+  positionRows: $('#position-rows'), positionsEmpty: $('#positions-empty')
 };
 
 const rangeList = (config, key, legacyMin, legacyMax) => Array.isArray(config?.[key]) && config[key].length ? config[key] : [{ min: config?.[legacyMin], max: config?.[legacyMax] }];
 const configRanges = (config, key) => key === 'fundingRanges' ? rangeList(config, key, 'minSol', 'maxSol') : rangeList(config, key, 'minDevBuy', 'maxDevBuy');
 const selectedConfig = () => state.configs.find((config) => config.id === selectedConfigId) || null;
 const byConfig = (items) => items.filter((item) => item.configId === selectedConfigId);
-const isBundle = (config) => config?.mode === 'bundle';
+// A rule written before bundle detection existed carries no mode, and the
+// server hands it back as it was stored: a missing one still reads as funding.
+const modeOf = (config) => ['funding', 'bundle', 'wallet'].includes(config?.mode) ? config.mode : 'funding';
+const isBundle = (config) => modeOf(config) === 'bundle';
+const isWallet = (config) => modeOf(config) === 'wallet';
+const modeLabels = { funding: 'Funding', bundle: 'Bundle', wallet: 'Wallet' };
 const inRange = (items) => { const span = rangeWindows[activeRange]; if (span === Infinity) return items; const floor = Date.now() - span; return items.filter((item) => new Date(item.at).getTime() >= floor); };
 const statsFor = (configId) => {
   const events = inRange(state.events.filter((event) => event.configId === configId));
@@ -139,7 +153,7 @@ function render() {
   $('#crumb-name').textContent = onDetail ? config.name : 'All scanners';
   $('#range-note').textContent = rangeNotes[activeRange];
   $('#ov-range').textContent = rangeNotes[activeRange];
-  renderStreamStatus(); renderWebhookStatus(); renderDock();
+  renderStreamStatus(); renderWebhookStatus(); renderTradeStatus(); renderDock();
   els.dashboardEmpty.hidden = hasConfigs;
   els.overview.hidden = !hasConfigs || onDetail;
   els.dashboard.hidden = !onDetail;
@@ -160,6 +174,24 @@ function renderStreamStatus() {
   pill.title = stream.idle
     ? 'Standby — the pump.fun stream opens only while a wallet is under watch, to avoid burning Helius credits.'
     : 'pump.fun Parsed Stream';
+}
+
+/**
+ * Three states worth telling apart: armed (orders are real), dry run (orders are
+ * simulated against the live curve) and unavailable (no key, no orders at all).
+ * Conflating the first two is how a test run turns into a spend.
+ */
+function renderTradeStatus() {
+  const trade = state.tradeStatus || {};
+  const pill = $('#trade-state');
+  const armed = trade.armed;
+  const label = armed ? `Armed · ${trade.open || 0} open` : trade.configured || trade.dryRun ? `Dry run · ${trade.open || 0} open` : 'Auto buy off';
+  pill.textContent = label;
+  // Amber, not green: armed is the state that spends real SOL.
+  pill.className = `pill ${armed ? 'warn' : ''}`;
+  pill.title = armed
+    ? `Live orders are signed by ${trade.publicKey} — ceiling ${trade.maxBuySol} SOL per buy, ${trade.maxOpenPositions} positions max.`
+    : trade.reason || 'Orders are simulated against the live bonding curve. Set TRADING_ENABLED=true to arm the server.';
 }
 
 function renderWebhookStatus() {
@@ -186,6 +218,7 @@ function renderDock() {
   $('#dock-watched').textContent = state.watchedWallets.filter((watch) => new Date(watch.expiresAt).getTime() > Date.now()).length;
   $('#dock-launches').textContent = state.events.filter((event) => event.type === 'TOKEN_CREATE').length;
   $('#dock-alerts').textContent = state.alerts.length;
+  $('#dock-positions').textContent = (state.positions || []).filter((position) => position.status === 'open').length;
 }
 
 function renderOverview() {
@@ -205,14 +238,17 @@ function renderOverview() {
     const head = create('div', 'ov-head');
     const title = create('div', 'ov-title');
     const copy = create('div');
+    const addresses = config.watchAddresses.length;
     const subtitle = isBundle(config)
       ? `${config.bundleBuys?.length ?? 0} buy fingerprint · ${config.timeWindowMinutes} min window`
-      : `${config.watchAddresses.length} source${config.watchAddresses.length === 1 ? '' : 's'} · ${config.timeWindowMinutes} min window`;
+      : isWallet(config)
+        ? `${addresses} wallet${addresses === 1 ? '' : 's'} tracked · ${config.timeWindowMinutes} min cooldown`
+        : `${addresses} source${addresses === 1 ? '' : 's'} · ${config.timeWindowMinutes} min window`;
     copy.append(create('strong', null, config.name), create('div', 'ov-meta', subtitle));
     title.append(create('i'), copy);
     const badges = create('div', 'ov-badges');
     badges.append(
-      create('span', 'pill', isBundle(config) ? 'Bundle' : 'Funding'),
+      create('span', 'pill', modeLabels[modeOf(config)]),
       create('span', `pill ${config.enabled ? 'good' : ''}`, config.enabled ? 'Active' : 'Paused')
     );
     head.append(title, badges);
@@ -221,7 +257,9 @@ function renderOverview() {
     const liveCandidates = isBundle(config) ? (state.candidates || []).filter((item) => item.configId === config.id).length : stats.watched;
     const columns = isBundle(config)
       ? [['Candidates', liveCandidates, ''], ['Buys', config.bundleBuys?.length ?? 0, ''], ['Signals', stats.signals, 'green']]
-      : [['Watched', stats.watched, ''], ['Launches', stats.launches, ''], ['Signals', stats.signals, 'green']];
+      : isWallet(config)
+        ? [['Tracked', addresses, ''], ['Copy buys', (state.positions || []).filter((item) => item.configId === config.id).length, ''], ['Signals', stats.signals, 'green']]
+        : [['Watched', stats.watched, ''], ['Launches', stats.launches, ''], ['Signals', stats.signals, 'green']];
     columns.forEach(([label, value, tone]) => {
       const box = create('div');
       box.append(create('span', 'stat-label', label), create('b', tone, String(value)));
@@ -231,7 +269,9 @@ function renderOverview() {
     const ranges = create('div', 'ov-ranges');
     const rows = isBundle(config)
       ? [['Dev buy', config.devBuyRanges ?? []], ['Bundle', config.bundleBuys ?? []]]
-      : [['Funding', configRanges(config, 'fundingRanges')], ['Dev buy', configRanges(config, 'devBuyRanges')]];
+      : isWallet(config)
+        ? [['Buy size', config.devBuyRanges ?? []]]
+        : [['Funding', configRanges(config, 'fundingRanges')], ['Dev buy', configRanges(config, 'devBuyRanges')]];
     rows.forEach(([label, list]) => {
       const row = create('div', 'ov-range');
       const text = list.length
@@ -254,6 +294,7 @@ function renderDashboard(config) {
   const watches = byConfig(state.watchedWallets).filter((watch) => new Date(watch.expiresAt).getTime() > Date.now());
   const events = inRange(byConfig(state.events));
   const alerts = inRange(byConfig(state.alerts));
+  const positions = byConfig(state.positions || []);
   const funding = configRanges(config, 'fundingRanges');
   const devBuys = configRanges(config, 'devBuyRanges');
 
@@ -271,23 +312,27 @@ function renderDashboard(config) {
   $('#tab-feed-count').textContent = events.length;
   $('#tab-wallets-count').textContent = watches.length;
   $('#tab-alerts-count').textContent = alerts.length;
+  $('#tab-positions-count').textContent = positions.filter((position) => position.status === 'open').length;
 
   const chips = $('#selected-wallet-chips');
   chips.replaceChildren();
   config.watchAddresses.forEach((wallet) => chips.append(create('span', 'chip-addr', short(wallet))));
 
   const bundle = isBundle(config);
+  const wallet = isWallet(config);
   const candidates = bundle ? byConfig(state.candidates || []) : [];
-  $('#card2-title').textContent = bundle ? 'Bundle fingerprint' : 'Signal funnel';
-  $('#card3-title').textContent = bundle ? 'Dev buy filter' : 'Thresholds';
-  $('#detail-watched-label').textContent = bundle ? 'Live candidates' : 'Watched wallets';
-  $('#detail-sources-label').textContent = bundle ? 'Bundle buys' : 'Sources';
-  $('#foot-watched').textContent = bundle ? 'launches being followed' : 'inside the active window';
-  $('#label-funding').hidden = bundle;
-  $('#tab-wallets-label').textContent = bundle ? 'Candidates' : 'Watched wallets';
+  const pick = (fundingValue, bundleValue, walletValue) => bundle ? bundleValue : wallet ? walletValue : fundingValue;
+  $('#card2-title').textContent = pick('Signal funnel', 'Bundle fingerprint', 'Copy funnel');
+  $('#card3-title').textContent = pick('Thresholds', 'Dev buy filter', 'Buy size filter');
+  $('#detail-watched-label').textContent = pick('Watched wallets', 'Live candidates', 'Tracked wallets');
+  $('#detail-sources-label').textContent = pick('Sources', 'Bundle buys', 'Buy filters');
+  $('#foot-watched').textContent = pick('inside the active window', 'launches being followed', 'followed on every buy');
+  $('#label-funding').hidden = bundle || wallet;
+  $('#tab-wallets-label').textContent = pick('Watched wallets', 'Candidates', 'Tracked wallets');
   els.funnel.hidden = bundle;
   $('#funnel-split').hidden = bundle;
-  document.querySelector('.legend').hidden = bundle;
+  // The legend names the exchange-funding stages, which no other funnel shares.
+  document.querySelector('.legend').hidden = bundle || wallet;
   els.fingerprint.hidden = !bundle;
 
   if (bundle) {
@@ -296,21 +341,100 @@ function renderDashboard(config) {
     $('#metric-sources').textContent = config.bundleBuys?.length ?? 0;
     renderFingerprint(config);
     renderCandidates(candidates, config);
+  } else if (wallet) {
+    $('#metric-watched').textContent = config.watchAddresses.length;
+    $('#tab-wallets-count').textContent = config.watchAddresses.length;
+    $('#metric-sources').textContent = devBuys.length;
+    renderFunnel(walletSteps(alerts, events, positions));
+    renderTracked(config, alerts);
   } else {
-    renderFunnel(events, alerts);
+    renderFunnel(fundingSteps(events, alerts));
     renderWatches(watches);
   }
-  renderThresholds(funding, devBuys, bundle);
+  renderThresholds(funding, devBuys, modeOf(config));
   renderEvents(events);
-  renderAlerts(alerts, bundle);
+  renderAlerts(alerts, modeOf(config));
+  renderPositions(positions);
 }
 
-function renderFunnel(events, alerts) {
-  const steps = [
-    { kind: 'funding', label: 'Exchange funding', count: events.filter((event) => event.type === 'FUNDING_MATCH').length },
-    { kind: 'create', label: 'Token creation', count: events.filter((event) => event.type === 'TOKEN_CREATE').length },
-    { kind: 'buy', label: 'Dev buy match', count: alerts.length }
-  ];
+const positionTones = { open: 'success', opening: 'warning', closing: 'warning', closed: '', failed: 'error' };
+
+function renderPositions(positions) {
+  els.positionRows.replaceChildren();
+  els.positionsEmpty.hidden = positions.length > 0;
+  positions.slice(0, 40).forEach((position) => {
+    const row = document.createElement('tr');
+
+    const token = cell();
+    const holder = create('div');
+    holder.append(
+      create('div', 't-strong', `${position.tokenName || 'Untitled token'}${position.tokenSymbol ? ` · $${position.tokenSymbol}` : ''}`),
+      mintLine(position.mint)
+    );
+    token.append(holder);
+
+    const status = cell();
+    status.append(create('span', `tag ${positionTones[position.status] ?? ''}`, position.status.toUpperCase()));
+    // A simulated position must never be mistaken for a real one at a glance.
+    if (position.dryRun) status.append(create('span', 'tag', 'SIM'));
+    if (position.error) status.title = position.error;
+
+    const settled = position.status === 'closed';
+    const pnlValue = settled ? position.realisedPnlPercent : position.pnlPercent;
+    const pnl = cell(`t-amount num ${Number(pnlValue) >= 0 ? 'green' : 'red'}`, position.entryPriceSol ? percent(pnlValue) : '—');
+
+    const action = cell();
+    if (position.status === 'open' || position.status === 'failed') {
+      const button = create('button', 'sell-btn', 'SELL');
+      button.type = 'button';
+      button.title = 'Close this position now';
+      button.addEventListener('click', () => sellPosition(position, button));
+      action.append(button);
+    } else if (position.sellSignature || position.buySignature) {
+      action.append(link('ext', 'TX ↗', `https://solscan.io/tx/${encodeURIComponent(position.sellSignature || position.buySignature)}`));
+    }
+
+    row.append(
+      token,
+      status,
+      cell('t-amount num', sol(position.costSol || position.amountSol)),
+      cell('t-amount num', price(position.entryPriceSol)),
+      cell('t-amount num', price(settled ? position.exitPriceSol : position.lastPriceSol)),
+      pnl,
+      cell('t-detail', position.exitReason || (position.status === 'open' ? `TP ${position.takeProfitPercent || '—'} / SL ${position.stopLossPercent || '—'}` : '—')),
+      action
+    );
+    els.positionRows.append(row);
+  });
+}
+
+async function sellPosition(position, button) {
+  if (!confirm(`Close ${position.tokenSymbol || short(position.mint)} now at market?`)) return;
+  button.disabled = true;
+  button.textContent = '…';
+  try {
+    await request(`/api/positions/${position.id}/sell`, { method: 'POST' });
+    await refresh();
+  } catch (error) {
+    alert(error.message);
+    button.disabled = false;
+    button.textContent = 'SELL';
+  }
+}
+
+const fundingSteps = (events, alerts) => [
+  { kind: 'funding', label: 'Exchange funding', count: events.filter((event) => event.type === 'FUNDING_MATCH').length },
+  { kind: 'create', label: 'Token creation', count: events.filter((event) => event.type === 'TOKEN_CREATE').length },
+  { kind: 'buy', label: 'Dev buy match', count: alerts.length }
+];
+
+const walletSteps = (alerts, events, positions) => [
+  { kind: 'funding', label: 'Tracked wallet buys', count: alerts.length },
+  { kind: 'create', label: 'Copy buys filled', count: events.filter((event) => event.type === 'AUTO_BUY_FILLED').length },
+  { kind: 'buy', label: 'Positions open', count: positions.filter((position) => position.status === 'open').length }
+];
+
+function renderFunnel(steps) {
   const peak = Math.max(1, ...steps.map((step) => step.count));
   els.funnel.replaceChildren();
   steps.forEach((step, index) => {
@@ -378,7 +502,37 @@ function renderCandidates(candidates, config) {
   });
 }
 
-function renderThresholds(funding, devBuys, bundle = false) {
+/**
+ * A tracked address has no watch window to count down, so the table answers the
+ * question that replaces it: how much this wallet has actually been doing.
+ */
+function renderTracked(config, alerts) {
+  els.watched.replaceChildren();
+  els.walletsEmpty.hidden = config.watchAddresses.length > 0;
+  els.walletsEmpty.textContent = 'This rule tracks no address yet.';
+  $('#wallets-head').replaceChildren(
+    create('th', null, 'Tracked wallet'), create('th', 'num', 'Signals'),
+    create('th', null, 'Last mint'), create('th', 'num', 'Last buy'), create('th')
+  );
+  config.watchAddresses.forEach((address) => {
+    const own = alerts.filter((alert) => alert.wallet === address);
+    const last = own[0] ?? null;
+    const row = document.createElement('tr');
+    const cellWallet = cell();
+    const holder = create('span', 'wallet-cell');
+    holder.append(create('span', 'wallet-dot'), link('t-mono', short(address), `https://solscan.io/account/${encodeURIComponent(address)}`));
+    cellWallet.append(holder);
+    const mint = cell();
+    if (last) mint.append(mintLine(last.mint));
+    else mint.textContent = '—';
+    const action = cell();
+    if (last) action.append(link('ext', 'PADRE ↗', padreUrl(last.mint)));
+    row.append(cellWallet, cell('t-amount num', String(own.length)), mint, cell('t-amount num', last ? sol(last.devBuyAmount) : '—'), action);
+    els.watched.append(row);
+  });
+}
+
+function renderThresholds(funding, devBuys, mode = 'funding') {
   const fill = (target, ranges, unit) => {
     target.replaceChildren();
     ranges.forEach((range) => {
@@ -387,8 +541,8 @@ function renderThresholds(funding, devBuys, bundle = false) {
       target.append(row);
     });
   };
-  fill(els.fundingRows, bundle ? [] : funding, 'SOL in');
-  fill(els.devBuyRows, devBuys, bundle ? 'SOL dev buy' : 'SOL buy');
+  fill(els.fundingRows, mode === 'funding' ? funding : [], 'SOL in');
+  fill(els.devBuyRows, devBuys, mode === 'bundle' ? 'SOL dev buy' : 'SOL buy');
 }
 
 function renderEvents(events) {
@@ -450,7 +604,11 @@ function renderWatches(watches) {
   });
 }
 
-function renderAlerts(alerts, bundle = false) {
+function renderAlerts(alerts, mode = 'funding') {
+  const bundle = mode === 'bundle';
+  const wallet = mode === 'wallet';
+  $('#alerts-col-amount').textContent = wallet ? 'Buy' : 'Dev buy';
+  $('#alerts-col-context').textContent = bundle ? 'Bundle' : wallet ? 'Wallet' : 'Funding';
   els.alerts.replaceChildren();
   els.alertsEmpty.hidden = alerts.length > 0;
   alerts.slice(0, 40).forEach((alert) => {
@@ -466,9 +624,9 @@ function renderAlerts(alerts, bundle = false) {
     row.append(
       token,
       cell('t-amount num green', sol(alert.devBuyAmount)),
-      cell(bundle ? 't-mono' : 't-amount num', bundle
+      cell(bundle || wallet ? 't-mono' : 't-amount num', bundle
         ? (alert.bundleBuys ?? []).map((value) => Number(value).toFixed(3)).join(' · ')
-        : sol(alert.fundingAmount)),
+        : wallet ? short(alert.wallet) : sol(alert.fundingAmount)),
       cell('t-amount num', alert.elapsedLabel || '—'),
       delivery,
       action
@@ -536,9 +694,13 @@ function setFormMode(mode, { seed = false } = {}) {
   formMode = mode;
   if (seed && mode === 'funding' && !els.devBuyFields.children.length) addRangeRow(els.devBuyFields);
   if (seed && mode === 'bundle' && !els.bundleFields.children.length) [0, 1, 2, 3].forEach(() => addRangeRow(els.bundleFields));
+  if (seed && mode === 'wallet' && !els.walletFields.children.length) addWalletRow();
+  $('#wallet-block-title').textContent = mode === 'wallet' ? 'Tracked wallets' : 'Source wallets';
+  $('#devbuy-block-title').textContent = mode === 'wallet' ? 'Buy size ranges' : 'Dev buy ranges';
   document.querySelectorAll('#mode-picker button').forEach((button) => button.classList.toggle('is-active', button.dataset.mode === mode));
+  // A section can serve more than one rule type, so `data-for` is a list.
   document.querySelectorAll('[data-for]').forEach((node) => {
-    const visible = node.dataset.for === mode;
+    const visible = node.dataset.for.split(' ').includes(mode);
     node.hidden = !visible;
     // A hidden `required` field still blocks submission, and the browser cannot
     // report it because it cannot focus it — disable them instead.
@@ -557,17 +719,48 @@ function openModal(config = null) {
   fields.timeWindowMinutes.value = config?.timeWindowMinutes ?? 60;
   fields.telegramChatId.value = config?.telegramChatId || '';
   fields.enabled.checked = config?.enabled ?? true;
-  setFormMode(config?.mode === 'bundle' ? 'bundle' : 'funding');
+  fillAutoBuy(config?.autoBuy);
+  setFormMode(config ? modeOf(config) : 'funding');
   (config?.watchAddresses?.length ? config.watchAddresses : ['']).forEach(addWalletRow);
   (config?.fundingRanges?.length ? config.fundingRanges : [{}]).forEach((range) => addRangeRow(els.fundingFields, range));
+  // Only an exchange-funding rule alerts on its ranges, so it is the only one
+  // seeded with an empty row to fill in.
   const devBuySeed = config?.devBuyRanges?.length
     ? config.devBuyRanges
-    : (config?.mode === 'bundle' ? [] : [{}]);
+    : (config && modeOf(config) !== 'funding' ? [] : [{}]);
   devBuySeed.forEach((range) => addRangeRow(els.devBuyFields, range));
   (config?.bundleBuys?.length ? config.bundleBuys : [{}, {}, {}, {}]).forEach((range) => addRangeRow(els.bundleFields, range));
   // Rows are added after the first call, so re-apply the enabled/disabled split.
   setFormMode(formMode);
   els.modal.showModal(); fields.name.focus();
+}
+
+// Defaults are only offered to a rule that has never been configured; an
+// existing rule is shown exactly what the server stored, zeros included.
+const AUTO_BUY_DEFAULTS = { enabled: false, amountSol: 0.05, slippagePercent: 15, priorityFeeSol: 0.0005, takeProfitPercent: 100, stopLossPercent: 40, maxHoldMinutes: 15 };
+
+function fillAutoBuy(autoBuy) {
+  const fields = els.form.elements;
+  const source = autoBuy ?? AUTO_BUY_DEFAULTS;
+  fields.autoBuyEnabled.checked = Boolean(source.enabled);
+  fields.autoBuyAmountSol.value = source.amountSol ?? '';
+  fields.autoBuySlippagePercent.value = source.slippagePercent ?? '';
+  fields.autoBuyPriorityFeeSol.value = source.priorityFeeSol ?? '';
+  fields.autoBuyTakeProfitPercent.value = source.takeProfitPercent ?? '';
+  fields.autoBuyStopLossPercent.value = source.stopLossPercent ?? '';
+  fields.autoBuyMaxHoldMinutes.value = source.maxHoldMinutes ?? '';
+  syncAutoBuyState();
+}
+
+function syncAutoBuyState() {
+  const on = els.form.elements.autoBuyEnabled.checked;
+  document.querySelector('.autobuy-grid').classList.toggle('is-off', !on);
+  const trade = state.tradeStatus || {};
+  $('#autobuy-note').textContent = !on
+    ? 'Signals are reported but nothing is bought.'
+    : trade.armed
+      ? `Live orders will be signed by ${short(trade.publicKey || '')} — capped at ${trade.maxBuySol} SOL per buy.`
+      : 'Orders are simulated against the live bonding curve until the server is armed.';
 }
 
 function values(selector) { return [...document.querySelectorAll(selector)].map((input) => input.value.trim()).filter(Boolean); }
@@ -591,9 +784,19 @@ function formPayload() {
     devBuyRanges: ranges(els.devBuyFields),
     timeWindowMinutes: Number(fields.timeWindowMinutes.value),
     telegramChatId: fields.telegramChatId.value.trim(),
-    enabled: fields.enabled.checked
+    enabled: fields.enabled.checked,
+    autoBuy: {
+      enabled: fields.autoBuyEnabled.checked,
+      amountSol: Number(fields.autoBuyAmountSol.value || 0),
+      slippagePercent: Number(fields.autoBuySlippagePercent.value || 0),
+      priorityFeeSol: Number(fields.autoBuyPriorityFeeSol.value || 0),
+      takeProfitPercent: Number(fields.autoBuyTakeProfitPercent.value || 0),
+      stopLossPercent: Number(fields.autoBuyStopLossPercent.value || 0),
+      maxHoldMinutes: Number(fields.autoBuyMaxHoldMinutes.value || 0)
+    }
   };
   if (formMode === 'bundle') return { ...payload, watchAddresses: [], bundleBuys: ranges(els.bundleFields) };
+  if (formMode === 'wallet') return { ...payload, watchAddresses: values('[data-wallet]'), fundingRanges: [] };
   return { ...payload, watchAddresses: values('[data-wallet]'), fundingRanges: ranges(els.fundingFields) };
 }
 
@@ -625,6 +828,7 @@ els.form.addEventListener('submit', async (event) => {
   try { await saveConfig(formPayload(), id); if (!id) selectedConfigId = state.configs[0]?.id || selectedConfigId; els.modal.close(); render(); } catch (error) { els.formError.textContent = error.message; }
 });
 document.querySelectorAll('#mode-picker button').forEach((button) => button.addEventListener('click', () => setFormMode(button.dataset.mode, { seed: true })));
+els.form.elements.autoBuyEnabled.addEventListener('change', syncAutoBuyState);
 $('#crumb-root').addEventListener('click', () => { view = 'overview'; render(); });
 $('#close-modal').addEventListener('click', () => els.modal.close());
 $('#cancel-modal').addEventListener('click', () => els.modal.close());

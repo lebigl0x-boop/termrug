@@ -11,6 +11,7 @@ const statePath = path.join(dataDirectory, 'state.json');
 // every row; these caps only bound the working set, not the stored history.
 export const HOT_EVENTS = 400;
 export const HOT_ALERTS = 200;
+export const HOT_POSITIONS = 100;
 
 async function readJson(file, fallback) {
   try {
@@ -62,6 +63,7 @@ class JsonStorage {
         launches: Array.isArray(state.launches) ? state.launches : [],
         alerts: Array.isArray(state.alerts) ? state.alerts : [],
         events: Array.isArray(state.events) ? state.events : [],
+        positions: Array.isArray(state.positions) ? state.positions : [],
         heliusWebhookId: state.heliusWebhookId ?? null
       }
     };
@@ -87,6 +89,7 @@ class JsonStorage {
   saveWatch() { return this.flushState(); }
   updateWatch() { return this.flushState(); }
   saveLaunch() { return this.flushState(); }
+  savePosition() { return this.flushState(); }
   setMeta() { return this.flushState(); }
   pruneExpired() { return this.flushState(); }
 
@@ -147,6 +150,16 @@ create table if not exists launches (
 );
 create index if not exists launches_expiry_idx on launches (expires_at);
 
+create table if not exists positions (
+  id text primary key,
+  config_id text,
+  mint text not null,
+  status text not null,
+  opened_at timestamptz not null,
+  payload jsonb not null
+);
+create index if not exists positions_opened_idx on positions (opened_at desc);
+
 create table if not exists app_meta (
   key text primary key,
   value jsonb
@@ -168,12 +181,14 @@ class PostgresStorage {
   }
 
   async load() {
-    const [configs, events, alerts, watches, launches, meta] = await Promise.all([
+    const [configs, events, alerts, watches, launches, positions, meta] = await Promise.all([
       this.pool.query('select payload from configs order by created_at desc'),
       this.pool.query('select payload from events order by at desc limit $1', [HOT_EVENTS]),
       this.pool.query('select payload from alerts order by at desc limit $1', [HOT_ALERTS]),
       this.pool.query('select payload from watched_wallets where alert_sent = false and expires_at > now() order by expires_at desc'),
       this.pool.query('select payload from launches where expires_at > now() order by expires_at desc'),
+      // Open positions are always reloaded; settled ones only as recent history.
+      this.pool.query("select payload from positions where status not in ('closed','failed') or opened_at > now() - interval '7 days' order by opened_at desc limit $1", [HOT_POSITIONS]),
       this.pool.query("select value from app_meta where key = 'heliusWebhookId'")
     ]);
     return {
@@ -183,6 +198,7 @@ class PostgresStorage {
         launches: launches.rows.map((row) => row.payload),
         alerts: alerts.rows.map((row) => row.payload),
         events: events.rows.map((row) => row.payload),
+        positions: positions.rows.map((row) => row.payload),
         heliusWebhookId: meta.rows[0]?.value ?? null
       }
     };
@@ -242,6 +258,14 @@ class PostgresStorage {
       `insert into launches (id, config_id, creator, mint, expires_at, payload) values ($1, $2, $3, $4, $5, $6)
        on conflict (config_id, creator, mint) do nothing`,
       [launch.id, launch.configId, launch.creator, launch.mint, launch.expiresAt, launch]
+    );
+  }
+
+  async savePosition(position) {
+    await this.pool.query(
+      `insert into positions (id, config_id, mint, status, opened_at, payload) values ($1, $2, $3, $4, $5, $6)
+       on conflict (id) do update set status = excluded.status, payload = excluded.payload`,
+      [position.id, position.configId ?? null, position.mint, position.status, position.openedAt, position]
     );
   }
 

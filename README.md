@@ -190,7 +190,7 @@ Two details matter and are easy to get wrong:
 
 ## Rule types
 
-A rule runs in one of two modes.
+A rule runs in one of three modes.
 
 **Exchange funding** is the original chain: an exchange hot wallet funds a fresh
 wallet, that wallet launches on pump.fun inside the window, and its dev buy
@@ -204,7 +204,15 @@ range narrows them to candidates, and each candidate's mint joins the Helius
 account filter until its buys resolve. A buy outside its window drops the
 candidate at once.
 
-Both modes read ranges in either form: explicit bounds, or a target with a
+**Wallet tracker** follows one or more addresses directly: every pump.fun buy
+they sign raises a signal, and auto buy turns it into a copy buy. There is no
+funding leg and no launch to wait for — the tracked address sits on the Helius
+account filter for as long as the rule is enabled. Its dev buy ranges act as a
+size filter when it has any, and its watch window is read as a per-mint
+cooldown, so a wallet topping up the same token does not raise the same signal
+— or the same order — several times over.
+
+All three modes read ranges in either form: explicit bounds, or a target with a
 tolerance in percent or SOL. The second form is what bundle amounts need —
 `18.204 ± 0.5%` covers the observed spread, while `18.204` to `18.204` would
 demand an exact lamport hit.
@@ -216,6 +224,37 @@ demand an exact lamport hit.
 - A buy / buy_v2 instruction must originate from the same creator, use the newly created mint, and land in the dev-buy range to fire an alert.
 - The buy amount prefers the actual largest outbound native transfer from the buyer in the parsed transaction. If Helius does not include transfers, it falls back to the decoded quote/SOL instruction argument.
 - Each watched funding record emits at most one alert. Expired watches and pending launches are pruned automatically every 30 seconds.
+- A wallet rule matches on the buyer alone, so it fires on any mint — including one the tracked wallet did not launch. Only pump.fun program buys are seen: a trade routed through a migrated pool is outside the subscription.
+
+## Auto buy
+
+A rule can execute as well as alert. Each scanner carries its own mandate — buy
+amount, slippage, priority fee, take profit, stop loss and max hold — and a
+confirmed signal opens a position against it.
+
+Orders are built by PumpPortal's `trade-local` endpoint, signed locally with
+`TRADER_PRIVATE_KEY` and broadcast through the Helius RPC, so the key never
+leaves the server and no third party custodies the wallet. `pool: "auto"` lets
+the same call work on the bonding curve and on a migrated pool.
+
+Exits are driven by the bonding curve account itself, polled every 2.5 seconds:
+its virtual reserves *are* the price of a pre-migration token, available from
+the second the mint exists and without a metered trade subscription. A position
+closes on take profit, on stop loss, on max hold, when the curve completes (the
+token migrated and the curve price is frozen), or by hand from the Positions
+tab.
+
+**Safety.** Auto buy stays in dry run — every order simulated against the live
+curve, nothing signed — until `TRADING_ENABLED=true`. `MAX_BUY_SOL` and
+`MAX_OPEN_POSITIONS` are server-side ceilings a rule cannot raise, the same mint
+is never bought twice at once, and a rule with no take profit, stop loss or max
+hold is rejected rather than allowed to open a position it could never close.
+A sell that fails three times stops retrying and is surfaced for a manual exit
+instead of silently churning.
+
+Use a dedicated wallet funded with only what you accept to lose: anything able
+to read `TRADER_PRIVATE_KEY` — a server compromise, a leaked log, a stray
+environment dump — can drain it.
 
 ## Telegram alert
 
@@ -233,6 +272,8 @@ solana-exchange-scanner/
     ├── storage.js        # Postgres and JSON storage adapters
     ├── helius.js         # Parsed Stream client and transaction helpers
     ├── pumpPortal.js     # Free pump.fun launch stream for bundle rules
+    ├── trader.js         # Auto buy: order execution, curve pricing, TP/SL loop
+    ├── wallet.js         # Trading keypair loading
     └── telegram.js       # Telegram HTML notification sender
 ```
 
@@ -241,6 +282,7 @@ solana-exchange-scanner/
 - `POST /webhook/helius` — Helius Enhanced Transaction payloads
 - `GET /api/bootstrap` — initial terminal state
 - `POST /api/configs`, `PUT /api/configs/:id`, `DELETE /api/configs/:id` — rules
+- `POST /api/positions/:id/sell` — close an auto-buy position at market
 - `ws://host/ws` — instant refresh of tape, active watches, alerts, config changes, and Helius stream status
 
 Data stays in `data/configs.json` and `data/state.json`; no database is required. Keep `.env` private and do not commit API keys or bot tokens.

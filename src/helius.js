@@ -213,6 +213,11 @@ async function postJson(url, payload, attempts = 4) {
   throw lastError ?? new Error('Helius request failed.');
 }
 
+// The trading engine opens its own RPC connection against the same endpoint.
+export function heliusRpcUrl(apiKey = process.env.HELIUS_API_KEY) {
+  return `${RPC_API}/?api-key=${encodeURIComponent(apiKey ?? '')}`;
+}
+
 async function rpcCall(apiKey, method, params) {
   const body = await postJson(`${RPC_API}/?api-key=${encodeURIComponent(apiKey)}`, { jsonrpc: '2.0', id: 1, method, params });
   if (body.error) throw new Error(body.error.message || JSON.stringify(body.error));

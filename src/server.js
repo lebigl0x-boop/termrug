@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { ConfigStore } from './configStore.js';
+import { ConfigStore, modeOf } from './configStore.js';
 import {
   HeliusParsedStream,
   accountsToObject,
@@ -21,6 +21,8 @@ import {
 } from './helius.js';
 import { PumpPortalStream } from './pumpPortal.js';
 import { sendTelegramAlert } from './telegram.js';
+import { TradeEngine } from './trader.js';
+import { loadTraderWallet } from './wallet.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = Number(process.env.PORT || 3000);
@@ -34,6 +36,10 @@ const pumpPortalStatus = { connected: false, configured: true, label: 'Standby',
 // Candidate launches being followed for a bundle fingerprint, keyed configId:mint.
 // Short-lived by design — a few minutes each — so they stay out of storage.
 const candidates = new Map();
+// Per-rule re-entry cooldowns for wallet tracking, keyed configId:mint. A
+// tracked wallet often buys the same mint several times in a row, and without
+// this every top-up would raise its own signal — and its own copy buy.
+const copyCooldowns = new Map();
 
 const storageLabel = await store.init();
 
@@ -42,6 +48,27 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 app.use(express.json({ limit: '2mb' }));
+
+/**
+ * Auto buy. The engine is created even when no key is configured so the UI can
+ * report exactly why it is idle, and it stays in dry run until TRADING_ENABLED
+ * is set — a misconfigured rule then shows up as a simulated order rather than
+ * as spent SOL. MAX_BUY_SOL is a server-side ceiling the rules cannot raise.
+ */
+const engine = new TradeEngine({
+  apiKey: process.env.HELIUS_API_KEY,
+  wallet: loadTraderWallet(),
+  dryRun: process.env.TRADING_ENABLED !== 'true',
+  maxBuySol: Number(process.env.MAX_BUY_SOL || 0.5),
+  maxOpenPositions: Number(process.env.MAX_OPEN_POSITIONS || 5),
+  onUpdate: (position) => {
+    // A null position is a price refresh: worth broadcasting, not worth a write.
+    if (position) store.savePosition(position).catch((error) => console.error('Position save failed:', error.message));
+    broadcast();
+  },
+  onEvent: (type, payload) => event(type, payload).catch((error) => console.error('Trade event failed:', error.message))
+});
+engine.adopt(store.state.positions);
 
 function snapshot() {
   return {
@@ -53,6 +80,8 @@ function snapshot() {
     streamStatus,
     pumpPortalStatus,
     candidates: activeCandidates().map(({ key, seen, ...rest }) => rest),
+    positions: engine.positions,
+    tradeStatus: engine.status(),
     webhookStatus,
     stats: statsCache,
     webhookUrl: `${publicUrl}/webhook/helius`,
@@ -149,7 +178,7 @@ async function processParsedTransaction(transaction) {
         || accountValue(accounts, ['user', 'creator', 'payer', 'authority']);
       const mint = accountValue(accounts, ['mint', 'base_mint', 'token_mint']);
       if (!creator || !mint) continue;
-      for (const config of store.configs.filter((item) => item.enabled)) {
+      for (const config of store.configs.filter((item) => item.enabled && modeOf(item) === 'funding')) {
         const watch = store.getActiveWatch(config.id, creator, now);
         if (!watch) continue;
         const launch = await store.addLaunch({
@@ -183,8 +212,9 @@ async function processParsedTransaction(transaction) {
       const amount = calculateBuySol(transaction, buyer, args);
       if (amount === null) continue;
       await recordBundleBuy({ mint, amount, buyer, signature, now });
+      await processTrackedBuy({ mint, amount, buyer, signature, now });
 
-      for (const config of store.configs.filter((item) => item.enabled && item.mode !== 'bundle' && matchesAnyRange(amount, item.devBuyRanges, item.minDevBuy, item.maxDevBuy))) {
+      for (const config of store.configs.filter((item) => item.enabled && modeOf(item) === 'funding' && matchesAnyRange(amount, item.devBuyRanges, item.minDevBuy, item.maxDevBuy))) {
         const watch = store.getActiveWatch(config.id, buyer, now);
         const launch = store.getLaunch(config.id, buyer, mint, now);
         if (!watch || !launch) continue;
@@ -236,8 +266,62 @@ async function processParsedTransaction(transaction) {
           message: `${launch.tokenSymbol || compact(mint)} dev buy matched at ${amount.toFixed(4)} SOL`,
           severity: 'success'
         });
+        autoBuy(config, { mint, tokenName: launch.tokenName, tokenSymbol: launch.tokenSymbol, alertId: alert.id, trigger: 'dev-buy' });
       }
     }
+  }
+}
+
+/**
+ * Wallet tracking. The tracked address is on the parsed stream filter for as
+ * long as its rule is enabled, so every pump.fun buy it signs lands here — no
+ * funding leg, no launch to wait for. The rule's dev buy ranges, when it has
+ * any, act as a size filter so a tracked wallet's dust buys can be ignored.
+ */
+async function processTrackedBuy({ mint, amount, buyer, signature, now }) {
+  for (const config of store.enabledWalletConfigs()) {
+    if (!config.watchAddresses.includes(buyer)) continue;
+    if (config.devBuyRanges.length && !matchesAnyRange(amount, config.devBuyRanges)) continue;
+    const key = `${config.id}:${mint}`;
+    if ((copyCooldowns.get(key) ?? 0) > now) continue;
+    copyCooldowns.set(key, now + config.timeWindowMinutes * 60_000);
+
+    const alert = await store.addAlert({
+      configId: config.id,
+      configName: config.name,
+      mode: 'wallet',
+      wallet: buyer,
+      mint,
+      tokenName: '',
+      tokenSymbol: '',
+      devBuyAmount: amount,
+      buySignature: signature,
+      elapsedMs: 0,
+      elapsedLabel: 'live',
+      telegram: 'pending'
+    });
+
+    try {
+      const chatId = config.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+      const result = await sendTelegramAlert({ token: process.env.TELEGRAM_BOT_TOKEN, chatId, alert });
+      alert.telegram = result.skipped ? 'skipped' : 'sent';
+    } catch (error) {
+      alert.telegram = 'failed';
+      alert.telegramError = error.message;
+      await event('TELEGRAM_ERROR', { configId: config.id, configName: config.name, wallet: buyer, mint, message: `Telegram delivery failed: ${error.message}`, severity: 'error' });
+    }
+
+    await event('WALLET_BUY_MATCH', {
+      configId: config.id,
+      configName: config.name,
+      amount,
+      wallet: buyer,
+      mint,
+      signature,
+      message: `${compact(buyer)} bought ${compact(mint)} for ${amount.toFixed(4)} SOL`,
+      severity: 'success'
+    });
+    autoBuy(config, { mint, alertId: alert.id, trigger: 'copy-trade' });
   }
 }
 
@@ -402,6 +486,17 @@ async function raiseBundleAlert(config, candidate, now) {
     message: `${candidate.tokenSymbol || compact(candidate.mint)} bundle matched — ${amounts.map((value) => value.toFixed(3)).join(' · ')} SOL`,
     severity: 'success'
   });
+  autoBuy(config, { mint: candidate.mint, tokenName: candidate.tokenName, tokenSymbol: candidate.tokenSymbol, alertId: alert.id, trigger: 'bundle' });
+}
+
+/**
+ * Deliberately not awaited: an order takes seconds to confirm, and the stream
+ * handler that raised the signal must stay free to process the next
+ * transaction. Failures are reported through the engine's own event stream.
+ */
+function autoBuy(config, context) {
+  if (!config.autoBuy?.enabled) return;
+  engine.open({ config, ...context }).catch((error) => console.error('Auto buy failed:', error.message));
 }
 
 function activeCandidates(now = Date.now()) {
@@ -412,6 +507,9 @@ function pruneCandidates(now = Date.now()) {
   let removed = 0;
   for (const [key, candidate] of candidates) {
     if (candidate.expiresAt <= now) { candidates.delete(key); removed += 1; }
+  }
+  for (const [key, until] of copyCooldowns) {
+    if (until <= now) copyCooldowns.delete(key);
   }
   return removed;
 }
@@ -425,10 +523,10 @@ function activeWatchWallets(now = Date.now()) {
     .map((watch) => watch.wallet))];
 }
 
-// Both legs ride the same subscription: funded wallets for the exchange chain,
-// candidate mints for bundle fingerprints.
+// Every leg rides the same subscription: funded wallets for the exchange chain,
+// candidate mints for bundle fingerprints, tracked addresses for wallet rules.
 function activeStreamAccounts(now = Date.now()) {
-  return [...new Set([...activeWatchWallets(now), ...activeCandidates(now).map((candidate) => candidate.mint)])];
+  return [...new Set([...activeWatchWallets(now), ...activeCandidates(now).map((candidate) => candidate.mint), ...store.trackedWallets()])];
 }
 
 function syncStream(reason) {
@@ -464,7 +562,7 @@ async function syncWebhook(trigger) {
       addresses: store.enabledWatchAddresses(),
       webhookId: store.state.heliusWebhookId,
       // A webhook is only expected when an exchange-funding rule is enabled.
-      needed: store.configs.some((config) => config.enabled && config.mode !== 'bundle')
+      needed: store.configs.some((config) => config.enabled && modeOf(config) === 'funding')
     });
     if ((result.id ?? null) !== store.state.heliusWebhookId) await store.setHeliusWebhookId(result.id ?? null);
     Object.assign(webhookStatus, {
@@ -500,6 +598,7 @@ app.post('/api/configs', async (request, response, next) => {
     await event('CONFIG_CREATED', { configId: config.id, configName: config.name, message: `Config “${config.name}” created`, severity: 'info' });
     await refreshStats();
     await syncWebhook('config created');
+    syncStream('config created');
     syncPumpPortal('config created');
     response.status(201).json(config);
   } catch (error) { next(error); }
@@ -528,6 +627,26 @@ app.delete('/api/configs/:id', async (request, response, next) => {
     syncStream('config deleted');
     syncPumpPortal('config deleted');
     response.status(204).end();
+  } catch (error) { next(error); }
+});
+
+/**
+ * Manual exit. An automated sell that has exhausted its retries leaves tokens
+ * in the wallet, so the position has to be closable by hand — which is also
+ * what makes a stuck position recoverable without a restart.
+ */
+app.post('/api/positions/:id/sell', async (request, response, next) => {
+  try {
+    const position = engine.positions.find((item) => item.id === request.params.id);
+    if (!position) return response.status(404).json({ error: 'Position not found.' });
+    if (position.status === 'closed') return response.status(409).json({ error: 'Position is already closed.' });
+    if (position.status === 'opening' || position.status === 'closing') return response.status(409).json({ error: 'An order is already in flight for this position.' });
+    // A hand-driven exit gets a fresh retry budget.
+    position.sellAttempts = 0;
+    position.status = 'open';
+    const closed = await engine.close(position, 'manual');
+    if (!closed) return response.status(502).json({ error: position.error || 'The exit order failed.' });
+    response.json(closed);
   } catch (error) { next(error); }
 });
 
@@ -594,6 +713,7 @@ server.listen(port, () => {
 });
 
 function shutdown() {
+  engine.stop();
   helius.stop();
   pumpPortal.stop();
   for (const client of wss.clients) client.terminate();

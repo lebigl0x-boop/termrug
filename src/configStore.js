@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { createStorage, HOT_ALERTS, HOT_EVENTS } from './storage.js';
+import { createStorage, HOT_ALERTS, HOT_EVENTS, HOT_POSITIONS } from './storage.js';
 
-const DEFAULT_STATE = { watchedWallets: [], launches: [], alerts: [], events: [], heliusWebhookId: null };
+const DEFAULT_STATE = { watchedWallets: [], launches: [], alerts: [], events: [], positions: [], heliusWebhookId: null };
 
 function cloneDefaultState() {
   return JSON.parse(JSON.stringify(DEFAULT_STATE));
@@ -52,28 +52,66 @@ function normaliseRanges(values, label, fallbackMin, fallbackMax) {
   });
 }
 
-export const RULE_MODES = ['funding', 'bundle'];
+export const RULE_MODES = ['funding', 'bundle', 'wallet'];
+
+// Rules written before bundle detection existed carry no mode, and they are
+// read back from storage exactly as they were stored. Every mode comparison
+// goes through here so a missing one keeps meaning what it meant then.
+export const modeOf = (config) => RULE_MODES.includes(config?.mode) ? config.mode : 'funding';
+
+const AUTO_BUY_DEFAULTS = {
+  enabled: false,
+  amountSol: 0,
+  slippagePercent: 15,
+  priorityFeeSol: 0.0005,
+  takeProfitPercent: 0,
+  stopLossPercent: 0,
+  maxHoldMinutes: 0
+};
+
+/**
+ * Auto buy is a rule-scoped trading mandate, so its bounds are validated here
+ * rather than at execution time — a rule that cannot exit is rejected before it
+ * can ever open a position, instead of leaving one stuck once it has.
+ */
+function normaliseAutoBuy(input, existing) {
+  const source = { ...AUTO_BUY_DEFAULTS, ...(existing ?? {}), ...(input ?? {}) };
+  const autoBuy = {
+    enabled: Boolean(source.enabled),
+    amountSol: number(source.amountSol, 'autoBuy.amountSol'),
+    slippagePercent: number(source.slippagePercent, 'autoBuy.slippagePercent'),
+    priorityFeeSol: number(source.priorityFeeSol, 'autoBuy.priorityFeeSol'),
+    takeProfitPercent: number(source.takeProfitPercent, 'autoBuy.takeProfitPercent'),
+    stopLossPercent: number(source.stopLossPercent, 'autoBuy.stopLossPercent'),
+    maxHoldMinutes: number(source.maxHoldMinutes, 'autoBuy.maxHoldMinutes')
+  };
+  if (!autoBuy.enabled) return autoBuy;
+  if (autoBuy.amountSol <= 0) throw new Error('Auto buy needs a buy amount above 0 SOL.');
+  if (autoBuy.slippagePercent <= 0 || autoBuy.slippagePercent > 100) throw new Error('Auto buy slippage must be between 0 and 100%.');
+  if (autoBuy.stopLossPercent > 100) throw new Error('A stop loss cannot exceed 100%.');
+  if (!autoBuy.takeProfitPercent && !autoBuy.stopLossPercent && !autoBuy.maxHoldMinutes) {
+    throw new Error('Auto buy needs a take profit, a stop loss or a max hold time — otherwise a position can never be closed.');
+  }
+  return autoBuy;
+}
 
 export function normaliseConfig(input = {}, existing = {}) {
   const name = String(input.name ?? existing.name ?? '').trim();
-  // Rules written before bundle detection existed carry no mode.
-  const mode = RULE_MODES.includes(input.mode ?? existing.mode) ? (input.mode ?? existing.mode) : 'funding';
+  const mode = modeOf({ mode: input.mode ?? existing.mode });
   const watchAddresses = Array.isArray(input.watchAddresses ?? existing.watchAddresses)
     ? [...new Set((input.watchAddresses ?? existing.watchAddresses).map((address) => String(address).trim()).filter(Boolean))]
     : [];
-  // A bundle rule has no exchange leg, so funding ranges are meaningless there;
-  // its dev buy range is an optional pre-filter rather than the alert condition.
+  // Only an exchange-funding rule makes the ranges its alert condition. A
+  // bundle rule has no exchange leg, and a wallet rule alerts on the tracked
+  // address itself — for both, a range is an optional pre-filter.
   const optional = (values, label, fallbackMin, fallbackMax) => {
     const provided = Array.isArray(values) && values.length;
     if (!provided && (fallbackMin === undefined || fallbackMin === null)) return [];
     return normaliseRanges(values, label, fallbackMin, fallbackMax);
   };
-  const fundingRanges = mode === 'bundle'
-    ? optional(input.fundingRanges ?? existing.fundingRanges, 'fundingRanges', input.minSol ?? existing.minSol, input.maxSol ?? existing.maxSol)
-    : normaliseRanges(input.fundingRanges ?? existing.fundingRanges, 'fundingRanges', input.minSol ?? existing.minSol, input.maxSol ?? existing.maxSol);
-  const devBuyRanges = mode === 'bundle'
-    ? optional(input.devBuyRanges ?? existing.devBuyRanges, 'devBuyRanges', input.minDevBuy ?? existing.minDevBuy, input.maxDevBuy ?? existing.maxDevBuy)
-    : normaliseRanges(input.devBuyRanges ?? existing.devBuyRanges, 'devBuyRanges', input.minDevBuy ?? existing.minDevBuy, input.maxDevBuy ?? existing.maxDevBuy);
+  const ranges = mode === 'funding' ? normaliseRanges : optional;
+  const fundingRanges = ranges(input.fundingRanges ?? existing.fundingRanges, 'fundingRanges', input.minSol ?? existing.minSol, input.maxSol ?? existing.maxSol);
+  const devBuyRanges = ranges(input.devBuyRanges ?? existing.devBuyRanges, 'devBuyRanges', input.minDevBuy ?? existing.minDevBuy, input.maxDevBuy ?? existing.maxDevBuy);
   const timeWindowMinutes = number(input.timeWindowMinutes ?? existing.timeWindowMinutes, 'timeWindowMinutes', { min: 0, strictPositive: true });
   // Ordered: the nth entry is matched against the nth buy that follows the launch.
   const bundleSource = input.bundleBuys ?? existing.bundleBuys ?? [];
@@ -87,6 +125,9 @@ export function normaliseConfig(input = {}, existing = {}) {
   }
   if (mode === 'bundle' && !bundleBuys.length) {
     throw new Error('A bundle rule needs at least one bundle buy amount.');
+  }
+  if (mode === 'wallet' && !watchAddresses.length) {
+    throw new Error('Add at least one wallet address to track.');
   }
 
   return {
@@ -103,6 +144,7 @@ export function normaliseConfig(input = {}, existing = {}) {
     minDevBuy: devBuyRanges[0]?.min ?? null,
     maxDevBuy: devBuyRanges[0]?.max ?? null,
     timeWindowMinutes,
+    autoBuy: normaliseAutoBuy(input.autoBuy, existing.autoBuy),
     telegramChatId: String(input.telegramChatId ?? existing.telegramChatId ?? '').trim(),
     enabled: Boolean(input.enabled ?? existing.enabled ?? true),
     createdAt: existing.createdAt ?? new Date().toISOString(),
@@ -167,19 +209,30 @@ export class ConfigStore {
   }
 
   activeConfigsForAddress(address) {
-    return this.configs.filter((config) => config.enabled && config.mode !== 'bundle' && config.watchAddresses.includes(address));
+    return this.configs.filter((config) => config.enabled && modeOf(config) === 'funding' && config.watchAddresses.includes(address));
   }
 
-  // Bundle rules watch pump.fun launches, not exchange wallets: they must not
-  // put an address into the Helius webhook, which bills per delivery.
+  // Only exchange-funding rules belong in the Helius webhook, which bills per
+  // delivery: a bundle rule watches pump.fun launches, and a wallet rule reads
+  // its tracked address off the parsed stream instead of its SOL transfers.
   enabledWatchAddresses() {
     return [...new Set(this.configs
-      .filter((config) => config.enabled && config.mode !== 'bundle')
+      .filter((config) => config.enabled && modeOf(config) === 'funding')
       .flatMap((config) => config.watchAddresses))];
   }
 
   enabledBundleConfigs() {
-    return this.configs.filter((config) => config.enabled && config.mode === 'bundle');
+    return this.configs.filter((config) => config.enabled && modeOf(config) === 'bundle');
+  }
+
+  enabledWalletConfigs() {
+    return this.configs.filter((config) => config.enabled && modeOf(config) === 'wallet');
+  }
+
+  // A tracked address has no watch window: it stays on the parsed stream filter
+  // for as long as its rule is enabled.
+  trackedWallets() {
+    return [...new Set(this.enabledWalletConfigs().flatMap((config) => config.watchAddresses))];
   }
 
   async setHeliusWebhookId(id) {
@@ -238,6 +291,23 @@ export class ConfigStore {
     this.sync();
     await this.storage.saveAlert(saved);
     return saved;
+  }
+
+  /**
+   * Positions are owned by the trade engine, which mutates them in place; this
+   * mirrors the same objects so a restart can hand them straight back.
+   */
+  async savePosition(position) {
+    const index = this.state.positions.findIndex((item) => item.id === position.id);
+    if (index === -1) this.state.positions.unshift(position);
+    else this.state.positions[index] = position;
+    // Only closed history is trimmed — an open position is never dropped.
+    const open = this.state.positions.filter((item) => item.status !== 'closed' && item.status !== 'failed');
+    const settled = this.state.positions.filter((item) => item.status === 'closed' || item.status === 'failed');
+    this.state.positions = [...open, ...settled.slice(0, HOT_POSITIONS)];
+    this.sync();
+    await this.storage.savePosition(position);
+    return position;
   }
 
   async markAlertSent(watchId) {

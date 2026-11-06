@@ -14,6 +14,7 @@
         <button type="button" class="topnav-item is-active" data-tab="feed">Scanner</button>
         <button type="button" class="topnav-item" data-tab="wallets">Wallets</button>
         <button type="button" class="topnav-item" data-tab="alerts">Alerts</button>
+        <button type="button" class="topnav-item" data-tab="positions">Positions</button>
       </nav>
       <div class="topbar-center">
         <button type="button" class="chip" id="copy-webhook" title="—"><span class="chip-icon">⧉</span>Copy webhook</button>
@@ -21,6 +22,7 @@
       <div class="topbar-right">
         <span class="pill" id="stream-status"><i></i><span>Connecting</span></span>
         <span class="pill" id="webhook-state">Checking</span>
+        <span class="pill" id="trade-state" title="Auto buy">Auto buy off</span>
         <button type="button" class="btn btn-primary" id="new-config">Create <span>+</span></button>
         <span class="avatar">FW</span>
       </div>
@@ -134,6 +136,7 @@
             <button type="button" class="tab is-active" data-tab="feed" role="tab">Live feed <em id="tab-feed-count">0</em></button>
             <button type="button" class="tab" data-tab="wallets" role="tab"><span id="tab-wallets-label">Watched wallets</span> <em id="tab-wallets-count">0</em></button>
             <button type="button" class="tab" data-tab="alerts" role="tab">Alerts <em id="tab-alerts-count">0</em></button>
+            <button type="button" class="tab" data-tab="positions" role="tab">Positions <em id="tab-positions-count">0</em></button>
             <span class="panel-tabs-spacer"></span>
             <span class="card-note" id="range-note">All time</span>
           </div>
@@ -158,10 +161,20 @@
             <div class="void-row" id="wallets-empty">No wallet has entered this scanner’s watch window.</div>
           </div>
 
+          <div class="panel-body" data-panel="positions" hidden>
+            <div class="table-scroll">
+              <table class="grid">
+                <thead><tr><th>Token</th><th>Status</th><th class="num">Size</th><th class="num">Entry</th><th class="num">Last</th><th class="num">P&amp;L</th><th>Exit</th><th></th></tr></thead>
+                <tbody id="position-rows"></tbody>
+              </table>
+            </div>
+            <div class="void-row" id="positions-empty">No auto-buy position has been opened for this scanner.</div>
+          </div>
+
           <div class="panel-body" data-panel="alerts" hidden>
             <div class="table-scroll">
               <table class="grid">
-                <thead><tr><th>Token</th><th class="num">Dev buy</th><th class="num">Funding</th><th class="num">Elapsed</th><th>Telegram</th><th></th></tr></thead>
+                <thead><tr><th>Token</th><th class="num" id="alerts-col-amount">Dev buy</th><th class="num" id="alerts-col-context">Funding</th><th class="num">Elapsed</th><th>Telegram</th><th></th></tr></thead>
                 <tbody id="alert-list"></tbody>
               </table>
             </div>
@@ -182,6 +195,7 @@
         <span class="dock-item muted">Watched <b id="dock-watched">0</b></span>
         <span class="dock-item muted">Launches <b id="dock-launches">0</b></span>
         <span class="dock-item green">Signals <b id="dock-alerts">0</b></span>
+        <span class="dock-item muted">Open <b id="dock-positions">0</b></span>
         <span class="dock-sep"></span>
         <span class="dock-item muted">UTC <b id="utc-clock">--:--:--</b></span>
       </div>
@@ -213,11 +227,19 @@
               <strong>Bundle fingerprint</strong>
               <small>A launch whose first buys repeat a known amount sequence.</small>
             </button>
+            <button type="button" data-mode="wallet">
+              <strong>Wallet tracker</strong>
+              <small>Follow one address and copy every pump.fun buy it signs.</small>
+            </button>
           </div>
 
-          <section class="rule-block" data-for="funding">
+          <section class="rule-block" data-for="funding wallet">
             <div class="rule-head">
-              <div><strong>Source wallets</strong><small>Any outgoing SOL transfer from these addresses can enter the funnel.</small></div>
+              <div>
+                <strong id="wallet-block-title">Source wallets</strong>
+                <small data-for="funding">Any outgoing SOL transfer from these addresses can enter the funnel.</small>
+                <small data-for="wallet">Every pump.fun buy signed by these addresses raises a signal.</small>
+              </div>
               <button type="button" class="link-btn" data-add="wallet">+ Add wallet</button>
             </div>
             <div id="wallet-fields" class="repeater"></div>
@@ -233,7 +255,7 @@
             </section>
             <section class="rule-block">
               <div class="rule-head">
-                <div><strong>Dev buy ranges</strong><small data-for="funding">Alert only when the buy matches any range.</small><small data-for="bundle">Pre-filter on the launch dev buy. Leave empty to follow every launch.</small></div>
+                <div><strong id="devbuy-block-title">Dev buy ranges</strong><small data-for="funding">Alert only when the buy matches any range.</small><small data-for="bundle">Pre-filter on the launch dev buy. Leave empty to follow every launch.</small><small data-for="wallet">Size filter on the tracked wallet’s buy. Leave empty to follow every buy.</small></div>
                 <button type="button" class="link-btn" data-add="devbuy">+ Add</button>
               </div>
               <div id="devbuy-fields" class="repeater"></div>
@@ -252,10 +274,27 @@
 
           <div class="section-label"><b>03</b><span class="kicker">Window &amp; delivery</span></div>
           <div class="settings-row">
-            <label class="field">Watch window<input name="timeWindowMinutes" type="number" min="1" step="1" required value="60" /><small data-for="funding">minutes after funding</small><small data-for="bundle">minutes to follow a launch</small></label>
+            <label class="field">Watch window<input name="timeWindowMinutes" type="number" min="1" step="1" required value="60" /><small data-for="funding">minutes after funding</small><small data-for="bundle">minutes to follow a launch</small><small data-for="wallet">minutes of cooldown per mint</small></label>
             <label class="field">Telegram chat ID<input name="telegramChatId" placeholder="-100…" /><small>optional rule override</small></label>
             <div class="field toggle-field">Status<label class="toggle-control"><input name="enabled" type="checkbox" checked /><span></span><b>Scanner active</b></label><small>pause without deleting</small></div>
           </div>
+          <hr />
+
+          <div class="section-label"><b>04</b><span class="kicker">Auto buy</span></div>
+          <div class="field toggle-field">
+            Execution
+            <label class="toggle-control"><input name="autoBuyEnabled" type="checkbox" /><span></span><b>Buy automatically on every confirmed signal</b></label>
+            <small id="autobuy-note">Orders are simulated until the server is armed.</small>
+          </div>
+          <div class="settings-row autobuy-grid">
+            <label class="field">Buy amount<input name="autoBuyAmountSol" type="number" min="0" step="any" placeholder="0.05" /><small>SOL per signal</small></label>
+            <label class="field">Slippage<input name="autoBuySlippagePercent" type="number" min="0" max="100" step="any" placeholder="15" /><small>percent</small></label>
+            <label class="field">Priority fee<input name="autoBuyPriorityFeeSol" type="number" min="0" step="any" placeholder="0.0005" /><small>SOL</small></label>
+            <label class="field">Take profit<input name="autoBuyTakeProfitPercent" type="number" min="0" step="any" placeholder="100" /><small>percent · 0 disables</small></label>
+            <label class="field">Stop loss<input name="autoBuyStopLossPercent" type="number" min="0" max="100" step="any" placeholder="40" /><small>percent · 0 disables</small></label>
+            <label class="field">Max hold<input name="autoBuyMaxHoldMinutes" type="number" min="0" step="1" placeholder="15" /><small>minutes · 0 disables</small></label>
+          </div>
+
           <p class="form-error" id="form-error" role="alert"></p>
         </div>
         <footer class="modal-foot">
